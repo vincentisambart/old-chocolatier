@@ -50,9 +50,34 @@ fn print_entity(entity: Entity, depth: u32) {
     });
 }
 
-fn sdk_path() -> String {
+#[allow(dead_code)]
+enum AppleSdk {
+    MacOs,
+    IOs,
+    IOsSimulator,
+    TvOs,
+    TvOsSimulator,
+    WatchOs,
+    WatchOsSimulator,
+}
+
+impl AppleSdk {
+    fn sdk_name(&self) -> &str {
+        match *self {
+            AppleSdk::MacOs => "macosx",
+            AppleSdk::IOs => "iphoneos",
+            AppleSdk::IOsSimulator => "iphonesimulator",
+            AppleSdk::TvOs => "appletvos",
+            AppleSdk::TvOsSimulator => "appletvsimulator",
+            AppleSdk::WatchOs => "watchos",
+            AppleSdk::WatchOsSimulator => "watchsimulator",
+        }
+    }
+}
+
+fn sdk_path(sdk: AppleSdk) -> String {
     let output = Command::new("xcrun")
-        .args(&["--sdk", "macosx", "--show-sdk-path"])
+        .args(&["--sdk", sdk.sdk_name(), "--show-sdk-path"])
         .output()
         .expect("xcrun command failed to start");
     assert!(output.status.success());
@@ -74,7 +99,7 @@ fn parse_objc<'a>(index: &'a Index, source: &str) -> Result<TranslationUnit<'a>,
         "-x",
         "objective-c", // The file doesn't have an Objective-C extension so set the language explicitely
         "-isysroot",
-        &sdk_path(),
+        &sdk_path(AppleSdk::MacOs),
     ]);
     parser.skip_function_bodies(true);
     parser.unsaved(&[clang::Unsaved::new(file.path(), source)]);
@@ -87,7 +112,6 @@ fn parse_objc<'a>(index: &'a Index, source: &str) -> Result<TranslationUnit<'a>,
             return Err(ParseError::CompilationError(diagnostic.get_text()));
         }
     }
-    println!("get_diagnostics: {:?}", tu.get_diagnostics());
     Ok(tu)
 }
 
