@@ -4,51 +4,9 @@ extern crate tempfile;
 // TODO:
 // - Do not forget the namespace support.
 
-use clang::{Clang, Entity, Index, TranslationUnit};
+use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
 use clang::diagnostic::Severity;
 use std::process::Command;
-
-fn print_entity(entity: Entity, depth: u32) {
-    let mut indent = String::new();
-    for _ in 0..depth {
-        indent.push_str("--");
-    }
-
-    println!("{}name: {:?}", indent, entity.get_name());
-    println!("{}display name: {:?}", indent, entity.get_display_name());
-    println!("{}kind: {:?}", indent, entity.get_kind());
-    println!("{}range: {:?}", indent, entity.get_range());
-    // println!("{}definition: {:?}", indent, entity.get_definition());
-    if let Some(attr) = entity.get_objc_attributes() {
-        println!("{}objc attributes: {:?}", indent, attr);
-    }
-    if let Some(t) = entity.get_type() {
-        println!("{}type: {:?}", indent, t);
-        println!("{}type result type: {:?}", indent, t.get_result_type());
-    }
-    if let Some(t) = entity.get_result_type() {
-        println!("{}return type: {:?}", indent, t);
-        println!(
-            "{}return canonical type: {:?}",
-            indent,
-            t.get_canonical_type()
-        );
-        println!("{}return type+: {:?}", indent, t.get_pointee_type());
-    }
-
-    if let Some(arguments) = entity.get_arguments() {
-        if !arguments.is_empty() {
-            println!("{}arguments:", indent);
-            for argument in arguments {
-                print_entity(argument, depth + 1);
-            }
-        }
-    }
-
-    entity.get_children().into_iter().for_each(|child| {
-        print_entity(child, depth + 1);
-    });
-}
 
 #[allow(dead_code)]
 enum AppleSdk {
@@ -90,9 +48,70 @@ enum ParseError {
     CompilationError(String),
 }
 
-fn parse_objc<'a>(index: &'a Index, source: &str) -> Result<TranslationUnit<'a>, ParseError> {
+#[derive(Debug)]
+struct ObjCMethod {
+    selector: String,
+}
+
+impl ObjCMethod {
+    fn from(entity: &Entity) -> ObjCMethod {
+        assert!(
+            entity.get_kind() == EntityKind::ObjCInstanceMethodDecl
+                || entity.get_kind() == EntityKind::ObjCClassMethodDecl
+        );
+        ObjCMethod {
+            selector: entity.get_name().unwrap(),
+        }
+    }
+
+    fn selector(&self) -> &str {
+        &self.selector
+    }
+}
+
+#[derive(Debug)]
+struct ObjCClass {
+    name: String,
+    instance_methods: Vec<ObjCMethod>,
+    class_methods: Vec<ObjCMethod>,
+}
+
+impl ObjCClass {
+    fn from(entity: &Entity) -> ObjCClass {
+        assert!(entity.get_kind() == EntityKind::ObjCInterfaceDecl);
+        let children = entity.get_children();
+        let instance_methods = children
+            .iter()
+            .filter(|child| child.get_kind() == EntityKind::ObjCInstanceMethodDecl)
+            .map(|decl| ObjCMethod::from(decl));
+        let class_methods = children
+            .iter()
+            .filter(|child| child.get_kind() == EntityKind::ObjCClassMethodDecl)
+            .map(|decl| ObjCMethod::from(decl));
+        ObjCClass {
+            name: entity.get_name().unwrap(),
+            instance_methods: instance_methods.collect(),
+            class_methods: class_methods.collect(),
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn instance_methods(&self) -> &[ObjCMethod] {
+        &self.instance_methods
+    }
+
+    fn class_methods(&self) -> &[ObjCMethod] {
+        &self.class_methods
+    }
+}
+
+fn parse_objc<'a>(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseError> {
     // The documentation says that files specified as unsaved must exist so create a dummy temporary empty file
     let file = tempfile::NamedTempFile::new().unwrap();
+    let index = Index::new(&clang, false, true);
     let mut parser = index.parser(file.path());
 
     parser.arguments(&[
@@ -106,25 +125,62 @@ fn parse_objc<'a>(index: &'a Index, source: &str) -> Result<TranslationUnit<'a>,
     let tu = parser.parse().map_err(|e| ParseError::SourceError(e))?;
     // The parser will try to parse as much as possible, even with errors.
     // In that case, we still want fail because some information will be missing anyway.
-    for diagnostic in tu.get_diagnostics() {
+    let diagnostics = tu.get_diagnostics();
+    let mut errors = diagnostics.iter().filter(|diagnostic| {
         let severity = diagnostic.get_severity();
-        if severity == Severity::Error || severity == Severity::Fatal {
-            return Err(ParseError::CompilationError(diagnostic.get_text()));
-        }
+        severity == Severity::Error || severity == Severity::Fatal
+    });
+    if let Some(error) = errors.next() {
+        return Err(ParseError::CompilationError(error.get_text()));
     }
-    Ok(tu)
+
+    let mut objc_classes: Vec<ObjCClass> = Vec::new();
+    tu.get_entity().visit_children(|entity, _| {
+        if entity.get_kind() == EntityKind::ObjCInterfaceDecl {
+            objc_classes.push(ObjCClass::from(&entity));
+        }
+        EntityVisitResult::Continue
+    });
+    Ok(objc_classes)
 }
 
 fn main() {
     let source = "
-    #import <Foundation/Foundation.h>
+    @interface A
+    - (void)foo;
+    + (void)bar;
+    @end
     ";
     let clang = Clang::new().expect("Could not load libclang");
-    let index = Index::new(&clang, false, true);
-    let tu = parse_objc(&index, source).unwrap();
+    let objc_classes = parse_objc(&clang, source).unwrap();
+    println!("{:?}", objc_classes);
+}
 
-    for entity in tu.get_entity().get_children().into_iter() {
-        print_entity(entity, 0);
-        println!();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple_class() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @interface A
+            - (void)foo;
+            + (void)bar;
+            - (void)hoge;
+            @end
+        ";
+
+        let objc_classes = parse_objc(&clang, source).unwrap();
+        assert_eq!(objc_classes.len(), 1);
+        assert_eq!(objc_classes[0].name(), "A");
+        let class_methods = objc_classes[0].class_methods();
+        let instance_methods = objc_classes[0].instance_methods();
+        assert_eq!(class_methods.len(), 1);
+        assert_eq!(class_methods[0].selector(), "bar");
+        assert_eq!(instance_methods.len(), 2);
+        assert_eq!(instance_methods[0].selector(), "foo");
+        assert_eq!(instance_methods[1].selector(), "hoge");
     }
 }
