@@ -1,0 +1,9 @@
+[package]
+name = "bridge"
+version = "0.1.0"
+authors = ["Vincent Isambart <vincent.isambart@gmail.com>"]
+
+[dependencies]
+clang = "0.18"
+quote = "0.3"
+tempfile = "2.2"
