@@ -3,6 +3,8 @@ extern crate tempfile;
 
 // TODO:
 // - Do not forget the namespace support.
+// - Maybe do something for 32/64-bit differences.
+// - Maybe handle lightweight generics.
 
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
 use clang::diagnostic::Severity;
@@ -49,8 +51,46 @@ enum ParseError {
 }
 
 #[derive(Debug)]
+enum ObjCType {
+    Void,
+}
+
+impl ObjCType {
+    fn from(clang_type: &clang::Type) -> ObjCType {
+        let kind = clang_type.get_kind();
+        match kind {
+            clang::TypeKind::Typedef => ObjCType::from(&clang_type.get_canonical_type()),
+            _ => {
+                println!("Unimplement type {:?}", kind);
+                ObjCType::Void
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ObjCMethodArg {
+    name: String,
+    objc_type: ObjCType,
+}
+
+impl ObjCMethodArg {
+    fn from(entity: &Entity) -> ObjCMethodArg {
+        assert!(entity.get_kind() == EntityKind::ParmDecl);
+        if entity.get_type().unwrap().get_kind() == clang::TypeKind::Unexposed {
+            println!("unexposed entity: {:?}", entity);
+        }
+        ObjCMethodArg {
+            name: entity.get_name().unwrap(),
+            objc_type: ObjCType::from(&entity.get_type().unwrap()),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct ObjCMethod {
     selector: String,
+    args: Vec<ObjCMethodArg>,
 }
 
 impl ObjCMethod {
@@ -59,8 +99,13 @@ impl ObjCMethod {
             entity.get_kind() == EntityKind::ObjCInstanceMethodDecl
                 || entity.get_kind() == EntityKind::ObjCClassMethodDecl
         );
+        let argument_entities = entity.get_arguments().unwrap();
+        let arguments = argument_entities
+            .iter()
+            .map(|arg_entity| ObjCMethodArg::from(arg_entity));
         ObjCMethod {
             selector: entity.get_name().unwrap(),
+            args: arguments.collect(),
         }
     }
 
@@ -146,10 +191,7 @@ fn parse_objc<'a>(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseEr
 
 fn main() {
     let source = "
-    @interface A
-    - (void)foo;
-    + (void)bar;
-    @end
+    #import <Foundation/Foundation.h>
     ";
     let clang = Clang::new().expect("Could not load libclang");
     let objc_classes = parse_objc(&clang, source).unwrap();
