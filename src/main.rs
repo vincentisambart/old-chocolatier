@@ -53,6 +53,12 @@ enum ParseError {
     CompilationError(String),
 }
 
+impl From<clang::SourceError> for ParseError {
+    fn from(err: clang::SourceError) -> ParseError {
+        ParseError::SourceError(err)
+    }
+}
+
 #[derive(Debug)]
 enum ObjCType {
     Void,
@@ -170,7 +176,7 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseError>
     ]);
     parser.skip_function_bodies(true);
     parser.unsaved(&[clang::Unsaved::new(file.path(), source)]);
-    let tu = parser.parse().map_err(ParseError::SourceError)?;
+    let tu = parser.parse()?;
     // The parser will try to parse as much as possible, even with errors.
     // In that case, we still want fail because some information will be missing anyway.
     let diagnostics = tu.get_diagnostics();
