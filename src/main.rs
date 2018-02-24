@@ -135,20 +135,6 @@ impl ObjCMethod {
         }
     }
 
-    fn new(
-        kind: ObjCMethodKind,
-        sel: String,
-        args: Vec<ObjCMethodArg>,
-        ret_type: ObjCType,
-    ) -> ObjCMethod {
-        ObjCMethod {
-            kind: kind,
-            sel: sel,
-            args: args,
-            ret_type: ret_type,
-        }
-    }
-
     fn sel(&self) -> &str {
         &self.sel
     }
@@ -162,13 +148,6 @@ struct ObjCClass {
 }
 
 impl ObjCClass {
-    fn new(name: String, superclass_name: Option<String>, methods: Vec<ObjCMethod>) -> ObjCClass {
-        ObjCClass {
-            name: name,
-            superclass_name: superclass_name,
-            methods: methods,
-        }
-    }
     fn from(entity: &Entity) -> ObjCClass {
         assert!(entity.get_kind() == EntityKind::ObjCInterfaceDecl);
 
@@ -286,30 +265,30 @@ mod tests {
         ";
 
         let expected_classes: Vec<ObjCClass> = vec![
-            ObjCClass::new(
-                "A".into(),
-                None,
-                vec![
-                    ObjCMethod::new(
-                        ObjCMethodKind::InstanceMethod,
-                        "foo".into(),
-                        vec![],
-                        ObjCType::Void,
-                    ),
-                    ObjCMethod::new(
-                        ObjCMethodKind::ClassMethod,
-                        "bar".into(),
-                        vec![],
-                        ObjCType::Void,
-                    ),
-                    ObjCMethod::new(
-                        ObjCMethodKind::InstanceMethod,
-                        "hoge".into(),
-                        vec![],
-                        ObjCType::Void,
-                    ),
+            ObjCClass {
+                name: "A".into(),
+                superclass_name: None,
+                methods: vec![
+                    ObjCMethod {
+                        kind: ObjCMethodKind::InstanceMethod,
+                        sel: "foo".into(),
+                        args: vec![],
+                        ret_type: ObjCType::Void,
+                    },
+                    ObjCMethod {
+                        kind: ObjCMethodKind::ClassMethod,
+                        sel: "bar".into(),
+                        args: vec![],
+                        ret_type: ObjCType::Void,
+                    },
+                    ObjCMethod {
+                        kind: ObjCMethodKind::InstanceMethod,
+                        sel: "hoge".into(),
+                        args: vec![],
+                        ret_type: ObjCType::Void,
+                    },
                 ],
-            ),
+            },
         ];
 
         let parsed_classes = parse_objc(&clang, source).unwrap();
@@ -332,36 +311,36 @@ mod tests {
         ";
 
         let expected_classes: Vec<ObjCClass> = vec![
-            ObjCClass::new(
-                "B".into(),
-                None,
-                vec![
-                    ObjCMethod::new(
-                        ObjCMethodKind::InstanceMethod,
-                        "foo".into(),
-                        vec![],
-                        ObjCType::Void,
-                    ),
+            ObjCClass {
+                name: "B".into(),
+                superclass_name: None,
+                methods: vec![
+                    ObjCMethod {
+                        kind: ObjCMethodKind::InstanceMethod,
+                        sel: "foo".into(),
+                        args: vec![],
+                        ret_type: ObjCType::Void,
+                    },
                 ],
-            ),
-            ObjCClass::new(
-                "A".into(),
-                Some("B".into()),
-                vec![
-                    ObjCMethod::new(
-                        ObjCMethodKind::ClassMethod,
-                        "bar".into(),
-                        vec![],
-                        ObjCType::Void,
-                    ),
-                    ObjCMethod::new(
-                        ObjCMethodKind::InstanceMethod,
-                        "hoge".into(),
-                        vec![],
-                        ObjCType::Void,
-                    ),
+            },
+            ObjCClass {
+                name: "A".into(),
+                superclass_name: Some("B".into()),
+                methods: vec![
+                    ObjCMethod {
+                        kind: ObjCMethodKind::ClassMethod,
+                        sel: "bar".into(),
+                        args: vec![],
+                        ret_type: ObjCType::Void,
+                    },
+                    ObjCMethod {
+                        kind: ObjCMethodKind::InstanceMethod,
+                        sel: "hoge".into(),
+                        args: vec![],
+                        ret_type: ObjCType::Void,
+                    },
                 ],
-            ),
+            },
         ];
 
         let parsed_classes = parse_objc(&clang, source).unwrap();
