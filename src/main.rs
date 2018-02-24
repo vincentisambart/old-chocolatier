@@ -8,7 +8,8 @@ extern crate tempfile;
 // - Maybe do something for 32/64-bit differences.
 // - Maybe handle lightweight generics.
 // - For args, look for const/inout/out, and nullable/nonnull...
-// - Maybe convert ObjC errors (and/or exceptions) to Rust errors
+// - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
+// - Do not forget about categories.
 
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
 use clang::diagnostic::Severity;
@@ -156,28 +157,45 @@ impl ObjCMethod {
 #[derive(Debug, PartialEq)]
 struct ObjCClass {
     name: String,
+    superclass_name: Option<String>,
     methods: Vec<ObjCMethod>,
 }
 
 impl ObjCClass {
-    fn new(name: String, methods: Vec<ObjCMethod>) -> ObjCClass {
+    fn new(name: String, superclass_name: Option<String>, methods: Vec<ObjCMethod>) -> ObjCClass {
         ObjCClass {
             name: name,
+            superclass_name: superclass_name,
             methods: methods,
         }
     }
     fn from(entity: &Entity) -> ObjCClass {
         assert!(entity.get_kind() == EntityKind::ObjCInterfaceDecl);
+
         let children = entity.get_children();
+        let mut superclass_names = children
+            .iter()
+            .filter(|child| child.get_kind() == EntityKind::ObjCSuperClassRef)
+            .map(|super_class| super_class.get_name());
+
+        let superclass_name: Option<String> = match superclass_names.next() {
+            Some(Some(ref name)) => Some(name.clone()),
+            Some(None) => panic!("A superclass is expected to have a name"),
+            None => None,
+        };
+        // There should only be one superclass.
+        assert!(superclass_names.next() == None);
+
         let methods = children
             .iter()
             .filter(|child| {
                 child.get_kind() == EntityKind::ObjCInstanceMethodDecl
                     || child.get_kind() == EntityKind::ObjCClassMethodDecl
             })
-            .map(|decl| ObjCMethod::from(decl));
+            .map(ObjCMethod::from);
         ObjCClass {
             name: entity.get_name().unwrap(),
+            superclass_name: superclass_name,
             methods: methods.collect(),
         }
     }
@@ -256,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_class() {
+    fn very_simple_class() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -270,6 +288,7 @@ mod tests {
         let expected_classes: Vec<ObjCClass> = vec![
             ObjCClass::new(
                 "A".into(),
+                None,
                 vec![
                     ObjCMethod::new(
                         ObjCMethodKind::InstanceMethod,
@@ -277,6 +296,58 @@ mod tests {
                         vec![],
                         ObjCType::Void,
                     ),
+                    ObjCMethod::new(
+                        ObjCMethodKind::ClassMethod,
+                        "bar".into(),
+                        vec![],
+                        ObjCType::Void,
+                    ),
+                    ObjCMethod::new(
+                        ObjCMethodKind::InstanceMethod,
+                        "hoge".into(),
+                        vec![],
+                        ObjCType::Void,
+                    ),
+                ],
+            ),
+        ];
+
+        let parsed_classes = parse_objc(&clang, source).unwrap();
+        assert_same_classes(&parsed_classes, &expected_classes);
+    }
+
+    #[test]
+    fn very_simple_inheritance() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @interface B
+            - (void)foo;
+            @end
+
+            @interface A: B
+            + (void)bar;
+            - (void)hoge;
+            @end
+        ";
+
+        let expected_classes: Vec<ObjCClass> = vec![
+            ObjCClass::new(
+                "B".into(),
+                None,
+                vec![
+                    ObjCMethod::new(
+                        ObjCMethodKind::InstanceMethod,
+                        "foo".into(),
+                        vec![],
+                        ObjCType::Void,
+                    ),
+                ],
+            ),
+            ObjCClass::new(
+                "A".into(),
+                Some("B".into()),
+                vec![
                     ObjCMethod::new(
                         ObjCMethodKind::ClassMethod,
                         "bar".into(),
