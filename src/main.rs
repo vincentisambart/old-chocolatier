@@ -5,12 +5,15 @@ extern crate tempfile;
 // - Do not forget the namespace support.
 // - Maybe do something for 32/64-bit differences.
 // - Maybe handle lightweight generics.
+// - For args, look for const/inout/out, and nullable/nonnull...
+// - Maybe convert ObjC errors (and/or exceptions) to Rust errors
 
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
 use clang::diagnostic::Severity;
 use std::process::Command;
 
 #[allow(dead_code)]
+#[derive(Copy, Clone)]
 enum AppleSdk {
     MacOs,
     IOs,
@@ -153,10 +156,10 @@ impl ObjCClass {
     }
 }
 
-fn parse_objc<'a>(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseError> {
+fn parse_objc(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseError> {
     // The documentation says that files specified as unsaved must exist so create a dummy temporary empty file
     let file = tempfile::NamedTempFile::new().unwrap();
-    let index = Index::new(&clang, false, true);
+    let index = Index::new(clang, false, true);
     let mut parser = index.parser(file.path());
 
     parser.arguments(&[
@@ -167,7 +170,7 @@ fn parse_objc<'a>(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseEr
     ]);
     parser.skip_function_bodies(true);
     parser.unsaved(&[clang::Unsaved::new(file.path(), source)]);
-    let tu = parser.parse().map_err(|e| ParseError::SourceError(e))?;
+    let tu = parser.parse().map_err(ParseError::SourceError)?;
     // The parser will try to parse as much as possible, even with errors.
     // In that case, we still want fail because some information will be missing anyway.
     let diagnostics = tu.get_diagnostics();
