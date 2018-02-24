@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 extern crate clang;
 extern crate tempfile;
 
@@ -12,7 +14,6 @@ use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
 use clang::diagnostic::Severity;
 use std::process::Command;
 
-#[allow(dead_code)]
 #[derive(Copy, Clone)]
 enum AppleSdk {
     MacOs,
@@ -59,7 +60,7 @@ impl From<clang::SourceError> for ParseError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum ObjCType {
     Void,
 }
@@ -77,7 +78,7 @@ impl ObjCType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ObjCMethodArg {
     name: String,
     objc_type: ObjCType,
@@ -96,10 +97,18 @@ impl ObjCMethodArg {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
+enum ObjCMethodKind {
+    InstanceMethod,
+    ClassMethod,
+}
+
+#[derive(Debug, PartialEq)]
 struct ObjCMethod {
-    selector: String,
+    kind: ObjCMethodKind,
+    sel: String,
     args: Vec<ObjCMethodArg>,
+    ret_type: ObjCType,
 }
 
 impl ObjCMethod {
@@ -108,44 +117,68 @@ impl ObjCMethod {
             entity.get_kind() == EntityKind::ObjCInstanceMethodDecl
                 || entity.get_kind() == EntityKind::ObjCClassMethodDecl
         );
-        let argument_entities = entity.get_arguments().unwrap();
-        let arguments = argument_entities
+        let arg_entities = entity.get_arguments().unwrap();
+        let args = arg_entities
             .iter()
             .map(|arg_entity| ObjCMethodArg::from(arg_entity));
+        let kind = match entity.get_kind() {
+            EntityKind::ObjCInstanceMethodDecl => ObjCMethodKind::InstanceMethod,
+            EntityKind::ObjCClassMethodDecl => ObjCMethodKind::ClassMethod,
+            _ => unreachable!(),
+        };
         ObjCMethod {
-            selector: entity.get_name().unwrap(),
-            args: arguments.collect(),
+            kind: kind,
+            sel: entity.get_name().unwrap(),
+            args: args.collect(),
+            ret_type: ObjCType::Void,
         }
     }
 
-    fn selector(&self) -> &str {
-        &self.selector
+    fn new(
+        kind: ObjCMethodKind,
+        sel: String,
+        args: Vec<ObjCMethodArg>,
+        ret_type: ObjCType,
+    ) -> ObjCMethod {
+        ObjCMethod {
+            kind: kind,
+            sel: sel,
+            args: args,
+            ret_type: ret_type,
+        }
+    }
+
+    fn sel(&self) -> &str {
+        &self.sel
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ObjCClass {
     name: String,
-    instance_methods: Vec<ObjCMethod>,
-    class_methods: Vec<ObjCMethod>,
+    methods: Vec<ObjCMethod>,
 }
 
 impl ObjCClass {
+    fn new(name: String, methods: Vec<ObjCMethod>) -> ObjCClass {
+        ObjCClass {
+            name: name,
+            methods: methods,
+        }
+    }
     fn from(entity: &Entity) -> ObjCClass {
         assert!(entity.get_kind() == EntityKind::ObjCInterfaceDecl);
         let children = entity.get_children();
-        let instance_methods = children
+        let methods = children
             .iter()
-            .filter(|child| child.get_kind() == EntityKind::ObjCInstanceMethodDecl)
-            .map(|decl| ObjCMethod::from(decl));
-        let class_methods = children
-            .iter()
-            .filter(|child| child.get_kind() == EntityKind::ObjCClassMethodDecl)
+            .filter(|child| {
+                child.get_kind() == EntityKind::ObjCInstanceMethodDecl
+                    || child.get_kind() == EntityKind::ObjCClassMethodDecl
+            })
             .map(|decl| ObjCMethod::from(decl));
         ObjCClass {
             name: entity.get_name().unwrap(),
-            instance_methods: instance_methods.collect(),
-            class_methods: class_methods.collect(),
+            methods: methods.collect(),
         }
     }
 
@@ -153,12 +186,8 @@ impl ObjCClass {
         &self.name
     }
 
-    fn instance_methods(&self) -> &[ObjCMethod] {
-        &self.instance_methods
-    }
-
-    fn class_methods(&self) -> &[ObjCMethod] {
-        &self.class_methods
+    fn methods(&self) -> &[ObjCMethod] {
+        &self.methods
     }
 }
 
@@ -211,6 +240,21 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn assert_same_classes(parsed_classes: &Vec<ObjCClass>, expected_classes: &Vec<ObjCClass>) {
+        assert_eq!(parsed_classes.len(), expected_classes.len());
+        for (parsed_class, expected_class) in parsed_classes.iter().zip(expected_classes) {
+            assert_eq!(parsed_class.name(), expected_class.name());
+
+            let parsed_methods = parsed_class.methods();
+            let expected_methods = expected_class.methods();
+            assert_eq!(parsed_methods.len(), expected_methods.len());
+
+            for (parsed_method, expected_method) in parsed_methods.iter().zip(expected_methods) {
+                assert_eq!(parsed_method.sel(), expected_method.sel());
+            }
+        }
+    }
+
     #[test]
     fn simple_class() {
         let clang = Clang::new().expect("Could not load libclang");
@@ -223,15 +267,33 @@ mod tests {
             @end
         ";
 
-        let objc_classes = parse_objc(&clang, source).unwrap();
-        assert_eq!(objc_classes.len(), 1);
-        assert_eq!(objc_classes[0].name(), "A");
-        let class_methods = objc_classes[0].class_methods();
-        let instance_methods = objc_classes[0].instance_methods();
-        assert_eq!(class_methods.len(), 1);
-        assert_eq!(class_methods[0].selector(), "bar");
-        assert_eq!(instance_methods.len(), 2);
-        assert_eq!(instance_methods[0].selector(), "foo");
-        assert_eq!(instance_methods[1].selector(), "hoge");
+        let expected_classes: Vec<ObjCClass> = vec![
+            ObjCClass::new(
+                "A".into(),
+                vec![
+                    ObjCMethod::new(
+                        ObjCMethodKind::InstanceMethod,
+                        "foo".into(),
+                        vec![],
+                        ObjCType::Void,
+                    ),
+                    ObjCMethod::new(
+                        ObjCMethodKind::ClassMethod,
+                        "bar".into(),
+                        vec![],
+                        ObjCType::Void,
+                    ),
+                    ObjCMethod::new(
+                        ObjCMethodKind::InstanceMethod,
+                        "hoge".into(),
+                        vec![],
+                        ObjCType::Void,
+                    ),
+                ],
+            ),
+        ];
+
+        let parsed_classes = parse_objc(&clang, source).unwrap();
+        assert_same_classes(&parsed_classes, &expected_classes);
     }
 }
