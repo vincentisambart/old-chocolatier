@@ -98,7 +98,7 @@ impl ObjCMethodArg {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum ObjCMethodKind {
     InstanceMethod,
     ClassMethod,
@@ -107,6 +107,7 @@ enum ObjCMethodKind {
 #[derive(Debug)]
 struct ObjCMethod {
     kind: ObjCMethodKind,
+    is_optional: bool,
     sel: String,
     args: Vec<ObjCMethodArg>,
     ret_type: ObjCType,
@@ -129,14 +130,31 @@ impl ObjCMethod {
         };
         ObjCMethod {
             kind: kind,
+            is_optional: entity.is_objc_optional(),
             sel: entity.get_name().unwrap(),
             args: args.collect(),
             ret_type: ObjCType::Void,
         }
     }
 
+    fn kind(&self) -> ObjCMethodKind {
+        self.kind
+    }
+
+    fn is_optional(&self) -> bool {
+        self.is_optional
+    }
+
     fn sel(&self) -> &str {
         &self.sel
+    }
+
+    fn args(&self) -> &[ObjCMethodArg] {
+        &self.args
+    }
+
+    fn ret_type(&self) -> &ObjCType {
+        &self.ret_type
     }
 }
 
@@ -150,8 +168,8 @@ struct ObjCClass {
 impl ObjCClass {
     fn from(entity: &Entity) -> ObjCClass {
         assert!(entity.get_kind() == EntityKind::ObjCInterfaceDecl);
-
         let children = entity.get_children();
+
         let mut superclass_names = children
             .iter()
             .filter(|child| child.get_kind() == EntityKind::ObjCSuperClassRef)
@@ -191,8 +209,35 @@ impl ObjCClass {
 #[derive(Debug)]
 struct ObjCProtocol {
     name: String,
-    required_methods: Vec<ObjCMethod>,
-    optional_methods: Vec<ObjCMethod>,
+    methods: Vec<ObjCMethod>,
+}
+
+impl ObjCProtocol {
+    fn from(entity: &Entity) -> ObjCProtocol {
+        assert!(entity.get_kind() == EntityKind::ObjCProtocolDecl);
+        let children = entity.get_children();
+
+        let methods = children
+            .iter()
+            .filter(|child| {
+                child.get_kind() == EntityKind::ObjCInstanceMethodDecl
+                    || child.get_kind() == EntityKind::ObjCClassMethodDecl
+            })
+            .map(ObjCMethod::from);
+
+        ObjCProtocol {
+            name: entity.get_name().unwrap(),
+            methods: methods.collect(),
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn methods(&self) -> &[ObjCMethod] {
+        &self.methods
+    }
 }
 
 #[derive(Debug)]
@@ -238,15 +283,22 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
     }
 
     let mut objc_classes: Vec<ObjCClass> = Vec::new();
+    let mut objc_protocols: Vec<ObjCProtocol> = Vec::new();
     tu.get_entity().visit_children(|entity, _| {
-        if entity.get_kind() == EntityKind::ObjCInterfaceDecl {
-            objc_classes.push(ObjCClass::from(&entity));
+        match entity.get_kind() {
+            EntityKind::ObjCInterfaceDecl => {
+                objc_classes.push(ObjCClass::from(&entity));
+            }
+            EntityKind::ObjCProtocolDecl => {
+                objc_protocols.push(ObjCProtocol::from(&entity));
+            }
+            _ => {}
         }
         EntityVisitResult::Continue
     });
     Ok(ObjCDecls {
         classes: objc_classes,
-        protocols: vec![],
+        protocols: objc_protocols,
     })
 }
 
@@ -263,6 +315,7 @@ fn main() {
 mod tests {
     use super::*;
 
+    // TODO: Compare return type and args
     fn assert_same_decls(parsed_decls: &ObjCDecls, expected_decls: &ObjCDecls) {
         let parsed_classes = parsed_decls.classes();
         let expected_classes = expected_decls.classes();
@@ -276,6 +329,25 @@ mod tests {
 
             for (parsed_method, expected_method) in parsed_methods.iter().zip(expected_methods) {
                 assert_eq!(parsed_method.sel(), expected_method.sel());
+            }
+        }
+
+        let parsed_protocols = parsed_decls.protocols();
+        let expected_protocols = expected_decls.protocols();
+        assert_eq!(parsed_protocols.len(), expected_protocols.len());
+        for (parsed_protocol, expected_protocol) in parsed_protocols.iter().zip(expected_protocols)
+        {
+            assert_eq!(parsed_protocol.name(), expected_protocol.name());
+
+            let parsed_methods = parsed_protocol.methods();
+            let expected_methods = expected_protocol.methods();
+            assert_eq!(parsed_methods.len(), expected_methods.len());
+            for (parsed_method, expected_method) in parsed_methods.iter().zip(expected_methods) {
+                assert_eq!(parsed_method.sel(), expected_method.sel());
+                assert_eq!(parsed_method.kind(), expected_method.kind());
+                assert_eq!(parsed_method.is_optional(), expected_method.is_optional());
+                assert_eq!(parsed_method.args(), expected_method.args());
+                assert_eq!(parsed_method.ret_type(), expected_method.ret_type());
             }
         }
     }
@@ -300,18 +372,21 @@ mod tests {
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
                             sel: "foo".into(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
                             sel: "bar".into(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
                             sel: "hoge".into(),
                             args: vec![],
                             ret_type: ObjCType::Void,
@@ -320,6 +395,55 @@ mod tests {
                 },
             ],
             protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn very_simple_protocol() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @protocol A
+            - (void)foo;
+            + (void)bar;
+            @optional
+            - (void)hoge;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![],
+            protocols: vec![
+                ObjCProtocol {
+                    name: "A".into(),
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
+                            sel: "bar".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: true,
+                            sel: "hoge".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                    ],
+                },
+            ],
         };
 
         let parsed_decls = parse_objc(&clang, source).unwrap();
@@ -349,6 +473,7 @@ mod tests {
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
                             sel: "foo".into(),
                             args: vec![],
                             ret_type: ObjCType::Void,
@@ -361,12 +486,14 @@ mod tests {
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
                             sel: "bar".into(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
                             sel: "hoge".into(),
                             args: vec![],
                             ret_type: ObjCType::Void,
