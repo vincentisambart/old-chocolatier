@@ -104,7 +104,7 @@ enum ObjCMethodKind {
     ClassMethod,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 struct ObjCMethod {
     kind: ObjCMethodKind,
     sel: String,
@@ -140,7 +140,7 @@ impl ObjCMethod {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 struct ObjCClass {
     name: String,
     superclass_name: Option<String>,
@@ -188,7 +188,30 @@ impl ObjCClass {
     }
 }
 
-fn parse_objc(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseError> {
+#[derive(Debug)]
+struct ObjCProtocol {
+    name: String,
+    required_methods: Vec<ObjCMethod>,
+    optional_methods: Vec<ObjCMethod>,
+}
+
+#[derive(Debug)]
+struct ObjCDecls {
+    classes: Vec<ObjCClass>,
+    protocols: Vec<ObjCProtocol>,
+}
+
+impl ObjCDecls {
+    fn classes(&self) -> &[ObjCClass] {
+        &self.classes
+    }
+
+    fn protocols(&self) -> &[ObjCProtocol] {
+        &self.protocols
+    }
+}
+
+fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
     // The documentation says that files specified as unsaved must exist so create a dummy temporary empty file
     let file = tempfile::NamedTempFile::new().unwrap();
     let index = Index::new(clang, false, true);
@@ -221,7 +244,10 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<Vec<ObjCClass>, ParseError>
         }
         EntityVisitResult::Continue
     });
-    Ok(objc_classes)
+    Ok(ObjCDecls {
+        classes: objc_classes,
+        protocols: vec![],
+    })
 }
 
 fn main() {
@@ -229,15 +255,17 @@ fn main() {
     #import <Foundation/Foundation.h>
     ";
     let clang = Clang::new().expect("Could not load libclang");
-    let objc_classes = parse_objc(&clang, source).unwrap();
-    println!("{:?}", objc_classes);
+    let decls = parse_objc(&clang, source).unwrap();
+    println!("{:?}", decls);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn assert_same_classes(parsed_classes: &Vec<ObjCClass>, expected_classes: &Vec<ObjCClass>) {
+    fn assert_same_decls(parsed_decls: &ObjCDecls, expected_decls: &ObjCDecls) {
+        let parsed_classes = parsed_decls.classes();
+        let expected_classes = expected_decls.classes();
         assert_eq!(parsed_classes.len(), expected_classes.len());
         for (parsed_class, expected_class) in parsed_classes.iter().zip(expected_classes) {
             assert_eq!(parsed_class.name(), expected_class.name());
@@ -264,35 +292,38 @@ mod tests {
             @end
         ";
 
-        let expected_classes: Vec<ObjCClass> = vec![
-            ObjCClass {
-                name: "A".into(),
-                superclass_name: None,
-                methods: vec![
-                    ObjCMethod {
-                        kind: ObjCMethodKind::InstanceMethod,
-                        sel: "foo".into(),
-                        args: vec![],
-                        ret_type: ObjCType::Void,
-                    },
-                    ObjCMethod {
-                        kind: ObjCMethodKind::ClassMethod,
-                        sel: "bar".into(),
-                        args: vec![],
-                        ret_type: ObjCType::Void,
-                    },
-                    ObjCMethod {
-                        kind: ObjCMethodKind::InstanceMethod,
-                        sel: "hoge".into(),
-                        args: vec![],
-                        ret_type: ObjCType::Void,
-                    },
-                ],
-            },
-        ];
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    superclass_name: None,
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            sel: "bar".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            sel: "hoge".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                    ],
+                },
+            ],
+            protocols: vec![],
+        };
 
-        let parsed_classes = parse_objc(&clang, source).unwrap();
-        assert_same_classes(&parsed_classes, &expected_classes);
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
     }
 
     #[test]
@@ -310,40 +341,43 @@ mod tests {
             @end
         ";
 
-        let expected_classes: Vec<ObjCClass> = vec![
-            ObjCClass {
-                name: "B".into(),
-                superclass_name: None,
-                methods: vec![
-                    ObjCMethod {
-                        kind: ObjCMethodKind::InstanceMethod,
-                        sel: "foo".into(),
-                        args: vec![],
-                        ret_type: ObjCType::Void,
-                    },
-                ],
-            },
-            ObjCClass {
-                name: "A".into(),
-                superclass_name: Some("B".into()),
-                methods: vec![
-                    ObjCMethod {
-                        kind: ObjCMethodKind::ClassMethod,
-                        sel: "bar".into(),
-                        args: vec![],
-                        ret_type: ObjCType::Void,
-                    },
-                    ObjCMethod {
-                        kind: ObjCMethodKind::InstanceMethod,
-                        sel: "hoge".into(),
-                        args: vec![],
-                        ret_type: ObjCType::Void,
-                    },
-                ],
-            },
-        ];
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "B".into(),
+                    superclass_name: None,
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                    ],
+                },
+                ObjCClass {
+                    name: "A".into(),
+                    superclass_name: Some("B".into()),
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            sel: "bar".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            sel: "hoge".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                    ],
+                },
+            ],
+            protocols: vec![],
+        };
 
-        let parsed_classes = parse_objc(&clang, source).unwrap();
-        assert_same_classes(&parsed_classes, &expected_classes);
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
     }
 }
