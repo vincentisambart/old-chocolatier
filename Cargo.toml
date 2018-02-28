@@ -7,3 +7,4 @@ authors = ["Vincent Isambart <vincent.isambart@gmail.com>"]
 clang = { version = "0.18", features = ["runtime", "clang_4_0"] }
 quote = "0.3"
 tempfile = "2.2"
+regex = "0.2"

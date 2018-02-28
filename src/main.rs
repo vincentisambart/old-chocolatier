@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 extern crate clang;
+extern crate regex;
 extern crate tempfile;
 
 // TODO:
@@ -14,6 +15,53 @@ extern crate tempfile;
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
 use clang::diagnostic::Severity;
 use std::process::Command;
+use regex::Regex;
+
+#[derive(Debug, PartialEq)]
+enum Origin {
+    ObjCCore,
+    Framework(String),
+    Library(String),
+    Unknown,
+}
+
+fn guess_origin(path: &str) -> Origin {
+    // TODO: Use lazy_static to not rebuild the regexs each time.
+    let framework_re = Regex::new(r"/([^./]+)\.framework/Headers/[^./]+.h\z").unwrap();
+    match framework_re.captures(path) {
+        Some(caps) => Origin::Framework(caps.get(1).unwrap().as_str().into()),
+        _ => {
+            let library_re = Regex::new(r"/usr/include/([^./]+)/[^./]+.h\z").unwrap();
+            match library_re.captures(path) {
+                Some(caps) => {
+                    let library = caps.get(1).unwrap().as_str();
+                    if library == "objc" {
+                        Origin::ObjCCore
+                    } else {
+                        Origin::Library(library.into())
+                    }
+                }
+                _ => Origin::Unknown,
+            }
+        }
+    }
+}
+
+fn get_entity_file_path(entity: &Entity) -> Option<String> {
+    let path = entity.get_location()?.get_file_location().file?.get_path();
+    match path.into_os_string().into_string() {
+        Ok(string) => Some(string),
+        _ => None,
+    }
+}
+
+fn guess_entity_origin(entity: &Entity) -> Origin {
+    if let Some(file_path) = get_entity_file_path(entity) {
+        guess_origin(&file_path)
+    } else {
+        Origin::Unknown
+    }
+}
 
 #[derive(Copy, Clone)]
 enum AppleSdk {
@@ -164,6 +212,7 @@ struct ObjCClass {
     superclass_name: Option<String>,
     adopted_protocol_names: Vec<String>,
     methods: Vec<ObjCMethod>,
+    guessed_origin: Origin,
 }
 
 impl ObjCClass {
@@ -202,6 +251,7 @@ impl ObjCClass {
             superclass_name: superclass_name,
             adopted_protocol_names: adopted_protocol_names.collect(),
             methods: methods.collect(),
+            guessed_origin: guess_entity_origin(entity),
         }
     }
 
@@ -227,6 +277,7 @@ struct ObjCProtocol {
     name: String,
     adopted_protocol_names: Vec<String>,
     methods: Vec<ObjCMethod>,
+    guessed_origin: Origin,
 }
 
 impl ObjCProtocol {
@@ -251,6 +302,7 @@ impl ObjCProtocol {
             name: entity.get_name().unwrap(),
             adopted_protocol_names: adopted_protocol_names.collect(),
             methods: methods.collect(),
+            guessed_origin: guess_entity_origin(entity),
         }
     }
 
@@ -342,7 +394,6 @@ fn main() {
 mod tests {
     use super::*;
 
-    // TODO: Compare return type and args
     fn assert_same_decls(parsed_decls: &ObjCDecls, expected_decls: &ObjCDecls) {
         let parsed_classes = parsed_decls.classes();
         let expected_classes = expected_decls.classes();
@@ -364,6 +415,11 @@ mod tests {
 
             for (parsed_method, expected_method) in parsed_methods.iter().zip(expected_methods) {
                 assert_eq!(parsed_method.sel(), expected_method.sel());
+                assert_eq!(parsed_method.kind(), expected_method.kind());
+                // For classes no method should be optional.
+                assert_eq!(parsed_method.is_optional(), expected_method.is_optional());
+                assert_eq!(parsed_method.args(), expected_method.args());
+                assert_eq!(parsed_method.ret_type(), expected_method.ret_type());
             }
         }
 
@@ -392,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn very_simple_class() {
+    fn test_very_simple_class() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -432,6 +488,7 @@ mod tests {
                             ret_type: ObjCType::Void,
                         },
                     ],
+                    guessed_origin: Origin::Unknown,
                 },
             ],
             protocols: vec![],
@@ -442,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn very_simple_protocol() {
+    fn test_very_simple_protocol() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -483,6 +540,7 @@ mod tests {
                             ret_type: ObjCType::Void,
                         },
                     ],
+                    guessed_origin: Origin::Unknown,
                 },
             ],
         };
@@ -492,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn very_simple_inheritance() {
+    fn test_very_simple_inheritance() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -521,6 +579,7 @@ mod tests {
                             ret_type: ObjCType::Void,
                         },
                     ],
+                    guessed_origin: Origin::Unknown,
                 },
                 ObjCClass {
                     name: "A".into(),
@@ -542,6 +601,7 @@ mod tests {
                             ret_type: ObjCType::Void,
                         },
                     ],
+                    guessed_origin: Origin::Unknown,
                 },
             ],
             protocols: vec![],
@@ -552,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_protocol_conformance() {
+    fn test_simple_protocol_conformance() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -584,6 +644,7 @@ mod tests {
                             ret_type: ObjCType::Void,
                         },
                     ],
+                    guessed_origin: Origin::Unknown,
                 },
             ],
             protocols: vec![
@@ -599,6 +660,7 @@ mod tests {
                             ret_type: ObjCType::Void,
                         },
                     ],
+                    guessed_origin: Origin::Unknown,
                 },
                 ObjCProtocol {
                     name: "B".into(),
@@ -612,6 +674,7 @@ mod tests {
                             ret_type: ObjCType::Void,
                         },
                     ],
+                    guessed_origin: Origin::Unknown,
                 },
             ],
         };
@@ -620,4 +683,28 @@ mod tests {
         assert_same_decls(&parsed_decls, &expected_decls);
     }
 
+    #[test]
+    fn test_guess_origin() {
+        assert_eq!(guess_origin(""), Origin::Unknown);
+        assert_eq!(
+            guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/System/Library/Frameworks/Foundation.framework/Headers/NSValue.h"),
+            Origin::Framework("Foundation".into()),
+        );
+        assert_eq!(
+            guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/System/Library/Frameworks/Metal.framework/Headers/MTLCaptureManager.h"),
+            Origin::Framework("Metal".into()),
+        );
+        assert_eq!(
+            guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/usr/include/objc/NSObject.h"),
+            Origin::ObjCCore,
+        );
+        assert_eq!(
+            guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/usr/include/dispatch/object.h"),
+            Origin::Library("dispatch".into()),
+        );
+        assert_eq!(
+            guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/usr/include/dispatch/queue.h"),
+            Origin::Library("dispatch".into()),
+        );
+    }
 }
