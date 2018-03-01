@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 extern crate clang;
+#[macro_use]
+extern crate lazy_static;
 extern crate regex;
 extern crate tempfile;
 
@@ -26,25 +28,26 @@ enum Origin {
 }
 
 fn guess_origin(path: &str) -> Origin {
-    // TODO: Use lazy_static to not rebuild the regexs each time.
-    let framework_re = Regex::new(r"/([^./]+)\.framework/Headers/[^./]+.h\z").unwrap();
-    match framework_re.captures(path) {
-        Some(caps) => Origin::Framework(caps.get(1).unwrap().as_str().into()),
-        _ => {
-            let library_re = Regex::new(r"/usr/include/([^./]+)/[^./]+.h\z").unwrap();
-            match library_re.captures(path) {
-                Some(caps) => {
-                    let library = caps.get(1).unwrap().as_str();
-                    if library == "objc" {
-                        Origin::ObjCCore
-                    } else {
-                        Origin::Library(library.into())
-                    }
-                }
-                _ => Origin::Unknown,
-            }
+    lazy_static! {
+        static ref FRAMEWORK_PATH_RE: Regex = Regex::new(r"/([^./]+)\.framework/Headers/[^./]+.h\z").unwrap();
+    }
+    if let Some(caps) = FRAMEWORK_PATH_RE.captures(path) {
+        return Origin::Framework(caps.get(1).unwrap().as_str().into());
+    }
+
+    lazy_static! {
+        static ref LIBRARY_PATH_RE: Regex = Regex::new(r"/usr/include/([^./]+)/[^./]+.h\z").unwrap();
+    }
+    if let Some(caps) = LIBRARY_PATH_RE.captures(path) {
+        let library = caps.get(1).unwrap().as_str();
+        if library == "objc" {
+            return Origin::ObjCCore;
+        } else {
+            return Origin::Library(library.into());
         }
     }
+
+    Origin::Unknown
 }
 
 fn get_entity_file_path(entity: &Entity) -> Option<String> {
