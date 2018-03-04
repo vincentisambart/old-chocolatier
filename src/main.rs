@@ -13,6 +13,7 @@ extern crate tempfile;
 // - For args, look for const/inout/out, and nullable/nonnull...
 // - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
 // - Do not forget about categories.
+// - instancetype
 
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
 use clang::diagnostic::Severity;
@@ -115,6 +116,8 @@ impl From<clang::SourceError> for ParseError {
 #[derive(Debug, PartialEq)]
 enum ObjCType {
     Void,
+    ObjCObjPtr(String),
+    Id,
 }
 
 impl ObjCType {
@@ -122,8 +125,59 @@ impl ObjCType {
         let kind = clang_type.get_kind();
         match kind {
             clang::TypeKind::Typedef => ObjCType::from(&clang_type.get_canonical_type()),
+            clang::TypeKind::ObjCObjectPointer => {
+                let pointee = clang_type.get_pointee_type().unwrap();
+                match pointee.get_kind() {
+                    clang::TypeKind::ObjCInterface => {
+                        ObjCType::ObjCObjPtr(pointee.get_display_name())
+                    }
+                    clang::TypeKind::Unexposed => {
+                        println!(
+                            "---------- Unexposed display name: {:?}",
+                            clang_type.get_display_name()
+                        );
+                        println!(
+                            "---------- template: {:?}",
+                            pointee.get_template_argument_types()
+                        );
+                        if clang_type.get_display_name() == "id" {
+                            ObjCType::Id
+                        } else if let Some(pointee_decl) = pointee.get_declaration() {
+                            assert!(pointee_decl.get_kind() == EntityKind::ObjCInterfaceDecl);
+                            println!("---: pointee: {:?}", pointee_decl);
+                            ObjCType::ObjCObjPtr(pointee_decl.get_name().unwrap())
+                        } else {
+                            panic!("{:?} -> {:?}", clang_type, pointee);
+                        }
+                    }
+                    _ => {
+                        // pointee.get_declaration()
+                        println!("{:?} -> {:?}", clang_type, pointee);
+                        println!(
+                            "+++: {:?} -> {:?}",
+                            clang_type.get_declaration(),
+                            pointee.get_declaration()
+                        );
+                        println!(
+                            "+++: {:?} -> {:?}",
+                            clang_type.get_fields(),
+                            pointee.get_fields()
+                        );
+                        println!(
+                            "+++: {:?} -> {:?}",
+                            clang_type.get_class_type(),
+                            pointee.get_class_type()
+                        );
+                        panic!("Unhandled objc obj pointer {:?}", pointee);
+                    }
+                }
+            }
             _ => {
-                println!("Unimplement type {:?}", kind);
+                println!(
+                    "Unimplement type {:?} - {:?}",
+                    kind,
+                    clang_type.get_display_name()
+                );
                 ObjCType::Void
             }
         }
@@ -139,6 +193,8 @@ struct ObjCMethodArg {
 impl ObjCMethodArg {
     fn from(entity: &Entity) -> ObjCMethodArg {
         assert!(entity.get_kind() == EntityKind::ParmDecl);
+        println!("ParmDecl children: {:?}", entity.get_children());
+
         if entity.get_type().unwrap().get_kind() == clang::TypeKind::Unexposed {
             println!("unexposed entity: {:?}", entity);
         }
@@ -179,12 +235,13 @@ impl ObjCMethod {
             EntityKind::ObjCClassMethodDecl => ObjCMethodKind::ClassMethod,
             _ => unreachable!(),
         };
+        println!("method children: {:?}", entity.get_children());
         ObjCMethod {
             kind: kind,
             is_optional: entity.is_objc_optional(),
             sel: entity.get_name().unwrap(),
             args: args.collect(),
-            ret_type: ObjCType::Void,
+            ret_type: ObjCType::from(&entity.get_result_type().unwrap()),
         }
     }
 
@@ -338,6 +395,116 @@ impl ObjCDecls {
     }
 }
 
+fn show_tree(entity: &Entity, indent_level: usize) {
+    let indent = {
+        let mut indent = String::new();
+        for _ in 0..indent_level {
+            indent.push_str("   ");
+        }
+        indent
+    };
+
+    if let Some(name) = entity.get_name() {
+        println!(
+            "{}*** kind: {:?} - {} ***",
+            indent,
+            entity.get_kind(),
+            name
+        );
+    } else {
+        println!("{}*** kind: {:?} ***", indent, entity.get_kind());
+    }
+    if entity.get_display_name() != entity.get_name() {
+        if let Some(display_name) = entity.get_display_name() {
+            println!("{}display name: {:?}", indent, display_name);
+        }
+    }
+
+    if let Some(arguments) = entity.get_arguments() {
+        println!("{}arguments:", indent);
+        for arg in arguments {
+            show_tree(&arg, indent_level + 1);
+        }
+    }
+
+    let availability = entity.get_availability();
+    if availability != clang::Availability::Available {
+        println!("{}availability: {:?}", indent, availability);
+    }
+
+    let canonical_entity = entity.get_canonical_entity();
+    if &canonical_entity != entity {
+        println!("{}canonical_entity: {:?}", indent, canonical_entity);
+    }
+
+    if let Some(definition) = entity.get_definition() {
+        println!("{}definition: {:?}", indent, definition);
+    }
+
+    if let Some(external_symbol) = entity.get_external_symbol() {
+        println!("{}external symbol: {:?}", indent, external_symbol);
+    }
+
+    if let Some(module) = entity.get_module() {
+        println!("{}module: {:?}", indent, module);
+    }
+
+    if let Some(template) = entity.get_template() {
+        println!("{}template: {:?}", indent, template);
+    }
+
+    if let Some(template_kind) = entity.get_template_kind() {
+        println!("{}template kind: {:?}", indent, template_kind);
+    }
+
+    if let Some(template_arguments) = entity.get_template_arguments() {
+        println!("{}template_arguments: {:?}", indent, template_arguments);
+    }
+
+    if let Some(clang_type) = entity.get_type() {
+        println!("{}type: {:?}", indent, clang_type);
+    }
+
+    if let Some(visibility) = entity.get_visibility() {
+        println!("{}visibility: {:?}", indent, visibility);
+    }
+
+    if let Some(result_type) = entity.get_result_type() {
+        println!("{}result_type: {:?}", indent, result_type);
+    }
+
+    if let Some(mangled_name) = entity.get_mangled_name() {
+        println!("{}mangled_name: {:?}", indent, mangled_name);
+    }
+
+    if let Some(objc_ib_outlet_collection_type) = entity.get_objc_ib_outlet_collection_type() {
+        println!(
+            "{}objc_ib_outlet_collection_type: {:?}",
+            indent, objc_ib_outlet_collection_type
+        );
+    }
+
+    if let Some(objc_type_encoding) = entity.get_objc_type_encoding() {
+        println!("{}objc type encoding: {:?}", indent, objc_type_encoding);
+    }
+
+    if let Some(objc_selector_index) = entity.get_objc_selector_index() {
+        println!("{}objc selector index: {:?}", indent, objc_selector_index);
+    }
+
+    if let Some(objc_qualifiers) = entity.get_objc_qualifiers() {
+        println!("{}objc qualifiers: {:?}", indent, objc_qualifiers);
+    }
+
+    let children = entity.get_children();
+    if !children.is_empty() {
+        println!("{}children:", indent);
+        for child in children {
+            show_tree(&child, indent_level + 1);
+        }
+    }
+}
+
 fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
     // The documentation says that files specified as unsaved must exist so create a dummy temporary empty file
     let file = tempfile::NamedTempFile::new().unwrap();
@@ -364,6 +531,10 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
         return Err(ParseError::CompilationError(error.get_text()));
     }
 
+    println!("--------------------------------");
+    show_tree(&tu.get_entity(), 0);
+    println!("--------------------------------");
+
     let mut objc_classes: Vec<ObjCClass> = Vec::new();
     let mut objc_protocols: Vec<ObjCProtocol> = Vec::new();
     tu.get_entity().visit_children(|entity, _| {
@@ -386,7 +557,23 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
 
 fn main() {
     let source = "
-    #import <Foundation/Foundation.h>
+    // #import <Foundation/Foundation.h>
+        // @protocol X;
+        // @protocol Y;
+        // @interface B<__covariant T>
+        // - (T)machin;
+        // @end
+        // @class C;
+        // typedef B<C *> *S;
+        // @interface A
+        // - (C<    /*  _____ ----- - */ X> *)foo:(B<   /*aaa*/ C<  X  , Y> *> *)xxx :(S *)yyy;
+        // @end
+
+        @interface A
+        @end
+        @interface A ()
+        - (void)foo;
+        @end
     ";
     let clang = Clang::new().expect("Could not load libclang");
     let decls = parse_objc(&clang, source).unwrap();
@@ -680,6 +867,55 @@ mod tests {
                     guessed_origin: Origin::Unknown,
                 },
             ],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_simple_objc_class_pointer() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @interface A
+            - (A *)foo;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
+                            sel: "bar".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "hoge".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
         };
 
         let parsed_decls = parse_objc(&clang, source).unwrap();
