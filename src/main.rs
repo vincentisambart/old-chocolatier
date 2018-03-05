@@ -116,8 +116,8 @@ impl From<clang::SourceError> for ParseError {
 #[derive(Debug, PartialEq)]
 enum ObjCType {
     Void,
-    ObjCObjPtr(String),
-    Id,
+    ObjCObjPtr(String, Vec<String>),
+    Id(Vec<String>),
 }
 
 impl ObjCType {
@@ -129,7 +129,7 @@ impl ObjCType {
                 let pointee = clang_type.get_pointee_type().unwrap();
                 match pointee.get_kind() {
                     clang::TypeKind::ObjCInterface => {
-                        ObjCType::ObjCObjPtr(pointee.get_display_name())
+                        ObjCType::ObjCObjPtr(pointee.get_display_name(), Vec::new())
                     }
                     clang::TypeKind::Unexposed => {
                         println!(
@@ -141,11 +141,11 @@ impl ObjCType {
                             pointee.get_template_argument_types()
                         );
                         if clang_type.get_display_name() == "id" {
-                            ObjCType::Id
+                            ObjCType::Id(Vec::new())
                         } else if let Some(pointee_decl) = pointee.get_declaration() {
                             assert!(pointee_decl.get_kind() == EntityKind::ObjCInterfaceDecl);
                             println!("---: pointee: {:?}", pointee_decl);
-                            ObjCType::ObjCObjPtr(pointee_decl.get_name().unwrap())
+                            ObjCType::ObjCObjPtr(pointee_decl.get_name().unwrap(), Vec::new())
                         } else {
                             panic!("{:?} -> {:?}", clang_type, pointee);
                         }
@@ -269,6 +269,7 @@ impl ObjCMethod {
 #[derive(Debug)]
 struct ObjCClass {
     name: String,
+    template_arguments: Vec<String>,
     superclass_name: Option<String>,
     adopted_protocol_names: Vec<String>,
     methods: Vec<ObjCMethod>,
@@ -308,6 +309,7 @@ impl ObjCClass {
 
         ObjCClass {
             name: entity.get_name().unwrap(),
+            template_arguments: Vec::new(),
             superclass_name: superclass_name,
             adopted_protocol_names: adopted_protocol_names.collect(),
             methods: methods.collect(),
@@ -648,6 +650,7 @@ mod tests {
             classes: vec![
                 ObjCClass {
                     name: "A".into(),
+                    template_arguments: Vec::new(),
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
@@ -753,6 +756,7 @@ mod tests {
             classes: vec![
                 ObjCClass {
                     name: "B".into(),
+                    template_arguments: Vec::new(),
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
@@ -768,6 +772,7 @@ mod tests {
                 },
                 ObjCClass {
                     name: "A".into(),
+                    template_arguments: Vec::new(),
                     superclass_name: Some("B".into()),
                     adopted_protocol_names: vec![],
                     methods: vec![
@@ -818,6 +823,7 @@ mod tests {
             classes: vec![
                 ObjCClass {
                     name: "A".into(),
+                    template_arguments: Vec::new(),
                     superclass_name: None,
                     adopted_protocol_names: vec!["B".into()],
                     methods: vec![
@@ -882,6 +888,7 @@ mod tests {
             classes: vec![
                 ObjCClass {
                     name: "A".into(),
+                    template_arguments: Vec::new(),
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
@@ -890,7 +897,7 @@ mod tests {
                             is_optional: false,
                             sel: "foo".into(),
                             args: vec![],
-                            ret_type: ObjCType::ObjCObjPtr("A".into()),
+                            ret_type: ObjCType::ObjCObjPtr("A".into(), Vec::new()),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
