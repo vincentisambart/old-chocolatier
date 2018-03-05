@@ -405,12 +405,7 @@ fn show_tree(entity: &Entity, indent_level: usize) {
     };
 
     if let Some(name) = entity.get_name() {
-        println!(
-            "{}*** kind: {:?} - {} ***",
-            indent,
-            entity.get_kind(),
-            name
-        );
+        println!("{}*** kind: {:?} - {} ***", indent, entity.get_kind(), name);
     } else {
         println!("{}*** kind: {:?} ***", indent, entity.get_kind());
     }
@@ -895,21 +890,7 @@ mod tests {
                             is_optional: false,
                             sel: "foo".into(),
                             args: vec![],
-                            ret_type: ObjCType::Void,
-                        },
-                        ObjCMethod {
-                            kind: ObjCMethodKind::ClassMethod,
-                            is_optional: false,
-                            sel: "bar".into(),
-                            args: vec![],
-                            ret_type: ObjCType::Void,
-                        },
-                        ObjCMethod {
-                            kind: ObjCMethodKind::InstanceMethod,
-                            is_optional: false,
-                            sel: "hoge".into(),
-                            args: vec![],
-                            ret_type: ObjCType::Void,
+                            ret_type: ObjCType::ObjCObjPtr("A".into()),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
