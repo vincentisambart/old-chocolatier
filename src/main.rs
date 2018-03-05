@@ -116,8 +116,9 @@ impl From<clang::SourceError> for ParseError {
 #[derive(Debug, PartialEq)]
 enum ObjCType {
     Void,
-    ObjCObjPtr(String, Vec<String>),
+    ObjCObjPtr(String, Vec<ObjCType>, Vec<String>),
     Id(Vec<String>),
+    TemplateArgument(String),
 }
 
 impl ObjCType {
@@ -129,7 +130,7 @@ impl ObjCType {
                 let pointee = clang_type.get_pointee_type().unwrap();
                 match pointee.get_kind() {
                     clang::TypeKind::ObjCInterface => {
-                        ObjCType::ObjCObjPtr(pointee.get_display_name(), Vec::new())
+                        ObjCType::ObjCObjPtr(pointee.get_display_name(), Vec::new(), Vec::new())
                     }
                     clang::TypeKind::Unexposed => {
                         println!(
@@ -145,7 +146,11 @@ impl ObjCType {
                         } else if let Some(pointee_decl) = pointee.get_declaration() {
                             assert!(pointee_decl.get_kind() == EntityKind::ObjCInterfaceDecl);
                             println!("---: pointee: {:?}", pointee_decl);
-                            ObjCType::ObjCObjPtr(pointee_decl.get_name().unwrap(), Vec::new())
+                            ObjCType::ObjCObjPtr(
+                                pointee_decl.get_name().unwrap(),
+                                Vec::new(),
+                                Vec::new(),
+                            )
                         } else {
                             panic!("{:?} -> {:?}", clang_type, pointee);
                         }
@@ -897,7 +902,135 @@ mod tests {
                             is_optional: false,
                             sel: "foo".into(),
                             args: vec![],
-                            ret_type: ObjCType::ObjCObjPtr("A".into(), Vec::new()),
+                            ret_type: ObjCType::ObjCObjPtr("A".into(), Vec::new(), Vec::new()),
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_simple_lightweight_generic() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @class B;
+            @interface A<__covariant T>
+            - (T)foo;
+            - (A<T>*)bar;
+            - (A<B*>*)hoge;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    template_arguments: vec!["T".into()],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::TemplateArgument("T".into()),
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "bar".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCObjPtr(
+                                "A".into(),
+                                vec![ObjCType::TemplateArgument("T".into())],
+                                vec![],
+                            ),
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "hoge".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCObjPtr(
+                                "A".into(),
+                                vec![ObjCType::ObjCObjPtr("B".into(), vec![], vec![])],
+                                vec![],
+                            ),
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_parameter_adopting_protocols() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @protocol P1, P2;
+            @class B;
+            @interface A<__covariant T>
+            - (void)foo:(id<P1, P2>)x;
+            + (void)bar:(B<P2>*)y;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    template_arguments: vec!["T".into()],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".into(),
+                            args: vec![
+                                ObjCMethodArg {
+                                    name: "x".into(),
+                                    objc_type: ObjCType::Id(vec!["P1".into(), "P2".into()]),
+                                },
+                            ],
+                            ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "bar".into(),
+                            args: vec![
+                                ObjCMethodArg {
+                                    name: "x".into(),
+                                    objc_type: ObjCType::ObjCObjPtr(
+                                        "B".into(),
+                                        vec![],
+                                        vec!["P2".into()],
+                                    ),
+                                },
+                            ],
+                            ret_type: ObjCType::Void,
                         },
                     ],
                     guessed_origin: Origin::Unknown,
