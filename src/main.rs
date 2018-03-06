@@ -123,6 +123,11 @@ enum ObjCType {
     TemplateArgument(String),
 }
 
+fn is_id(entity: &Entity) -> bool {
+    entity.get_kind() == EntityKind::TypeRef
+        && entity.get_type().unwrap().get_kind() == TypeKind::ObjCId
+}
+
 impl ObjCType {
     fn from(
         clang_type: &clang::Type,
@@ -216,9 +221,7 @@ impl ObjCType {
                                 template_arguments,
                                 protocol_names,
                             )
-                        } else if base_entity.get_kind() == EntityKind::TypeRef
-                            && base_entity.get_type().unwrap().get_kind() == TypeKind::ObjCId
-                        {
+                        } else if is_id(base_entity) {
                             assert!(template_arguments.is_empty());
                             ObjCType::Id(protocol_names)
                         } else {
@@ -268,6 +271,11 @@ impl ObjCType {
                 ObjCType::TemplateArgument(definition.get_name().unwrap())
             }
             TypeKind::Void => ObjCType::Void,
+            TypeKind::ObjCId => {
+                let child = children.next().unwrap();
+                assert!(is_id(child));
+                ObjCType::Id(Vec::new())
+            }
             _ => {
                 println!(
                     "Unimplemented type {:?} - {:?}",
