@@ -131,29 +131,38 @@ impl ObjCType {
     ) -> ObjCType {
         let kind = clang_type.get_kind();
         match kind {
-            TypeKind::Typedef => ObjCType::from(&clang_type.get_canonical_type(), children),
+            TypeKind::Typedef => {
+                let child = children.next().unwrap();
+                assert_eq!(child.get_kind(), EntityKind::TypeRef);
+                assert_eq!(child.get_name().unwrap(), clang_type.get_display_name());
+
+                let declaration = clang_type.get_declaration().unwrap();
+                let decl_children = declaration.get_children();
+                let mut peekable_children = decl_children.iter().peekable();
+                let objc_type =
+                    ObjCType::from(&clang_type.get_canonical_type(), &mut peekable_children);
+                assert!(peekable_children.peek() == None);
+                objc_type
+            }
             TypeKind::ObjCObjectPointer => {
                 let pointee = clang_type.get_pointee_type().unwrap();
                 match pointee.get_kind() {
                     TypeKind::ObjCInterface => {
                         let type_name = pointee.get_display_name();
                         let child = children.next().unwrap();
-                        assert!(
-                            child.get_kind() == EntityKind::ObjCClassRef
-                                && child.get_name().unwrap() == type_name
-                        );
+                        assert_eq!(child.get_kind(), EntityKind::ObjCClassRef);
+                        assert_eq!(child.get_name().unwrap(), type_name);
                         ObjCType::ObjCObjPtr(type_name, Vec::new(), Vec::new())
                     }
                     TypeKind::Unexposed => {
                         if let Some(pointee_decl) = pointee.get_declaration() {
                             assert!(pointee_decl.get_kind() == EntityKind::ObjCInterfaceDecl);
                             let first_child = children.next().unwrap();
-                            assert!(
-                                first_child.get_kind() == EntityKind::ObjCClassRef
-                                    && first_child.get_name() == pointee_decl.get_name()
-                            );
+                            assert_eq!(first_child.get_kind(), EntityKind::ObjCClassRef);
+                            assert_eq!(first_child.get_name(), pointee_decl.get_name());
                             let second_child_kind = children.peek().unwrap().get_kind();
                             match second_child_kind {
+                                // TODO: Need refactoring. Maybe can use recursion in some cases.
                                 EntityKind::TypeRef | EntityKind::ObjCClassRef => {
                                     let mut template_arguments: Vec<ObjCType> = Vec::new();
                                     'template_args_outer: loop {
@@ -527,9 +536,11 @@ fn show_tree(entity: &Entity, indent_level: usize) {
     }
 
     if let Some(arguments) = entity.get_arguments() {
-        println!("{}arguments:", indent);
-        for arg in arguments {
-            show_tree(&arg, indent_level + 1);
+        if !arguments.is_empty() {
+            println!("{}arguments:", indent);
+            for arg in arguments {
+                show_tree(&arg, indent_level + 1);
+            }
         }
     }
 
@@ -675,11 +686,15 @@ fn main() {
         // - (C<    /*  _____ ----- - */ X> *)foo:(B<   /*aaa*/ C<  X  , Y> *> *)xxx :(S *)yyy;
         // @end
 
-        @interface A
-        @end
-        @interface A ()
-        - (void)foo;
-        @end
+@interface I
+@end
+
+typedef I*T;
+
+@interface A
+- (T)foo;
+@end
+
     ";
     let clang = Clang::new().expect("Could not load libclang");
     let decls = parse_objc(&clang, source).unwrap();
