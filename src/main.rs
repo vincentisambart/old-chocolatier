@@ -119,13 +119,19 @@ impl From<clang::SourceError> for ParseError {
 enum ObjCType {
     Void,
     ObjCObjPtr(String, Vec<ObjCType>, Vec<String>),
-    Id(Vec<String>),
+    ObjCId(Vec<String>),
+    ObjCClass,
     TemplateArgument(String),
 }
 
-fn is_id(entity: &Entity) -> bool {
+fn is_objc_id(entity: &Entity) -> bool {
     entity.get_kind() == EntityKind::TypeRef
         && entity.get_type().unwrap().get_kind() == TypeKind::ObjCId
+}
+
+fn is_objc_class(entity: &Entity) -> bool {
+    entity.get_kind() == EntityKind::TypeRef
+        && entity.get_type().unwrap().get_kind() == TypeKind::ObjCClass
 }
 
 impl ObjCType {
@@ -224,9 +230,9 @@ impl ObjCType {
                                 template_arguments,
                                 protocol_names,
                             )
-                        } else if is_id(base_entity) {
+                        } else if is_objc_id(base_entity) {
                             assert!(template_arguments.is_empty());
-                            ObjCType::Id(protocol_names)
+                            ObjCType::ObjCId(protocol_names)
                         } else {
                             panic!("Indecipherable TypeKind::Unexposed {:?}", pointee);
                         }
@@ -275,8 +281,13 @@ impl ObjCType {
             TypeKind::Void => ObjCType::Void,
             TypeKind::ObjCId => {
                 let child = children.next().unwrap();
-                assert!(is_id(child));
-                ObjCType::Id(Vec::new())
+                assert!(is_objc_id(child));
+                ObjCType::ObjCId(Vec::new())
+            }
+            TypeKind::ObjCClass => {
+                let child = children.next().unwrap();
+                assert!(is_objc_class(child));
+                ObjCType::ObjCClass
             }
             _ => {
                 println!(
@@ -940,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_protocol_conformance() {
+    fn test_protocol_conformance() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -1013,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_objc_class_pointer() {
+    fn test_objc_class_pointer() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -1049,7 +1060,43 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_lightweight_generic() {
+    fn test_objc_class_return_value() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @interface A
+            - (Class)foo;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    template_arguments: Vec::new(),
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCClass,
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_lightweight_generic() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
@@ -1137,7 +1184,7 @@ mod tests {
                             args: vec![
                                 ObjCMethodArg {
                                     name: "x".into(),
-                                    objc_type: ObjCType::Id(vec!["P1".into(), "P2".into()]),
+                                    objc_type: ObjCType::ObjCId(vec!["P1".into(), "P2".into()]),
                                 },
                             ],
                             ret_type: ObjCType::Void,
