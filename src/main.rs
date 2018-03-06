@@ -9,7 +9,6 @@ extern crate tempfile;
 // TODO:
 // - Do not forget the namespace support.
 // - Maybe do something for 32/64-bit differences.
-// - Maybe handle lightweight generics.
 // - For args, look for const/inout/out, and nullable/nonnull...
 // - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
 // - Do not forget about categories.
@@ -155,81 +154,75 @@ impl ObjCType {
                         ObjCType::ObjCObjPtr(type_name, Vec::new(), Vec::new())
                     }
                     TypeKind::Unexposed => {
-                        if let Some(pointee_decl) = pointee.get_declaration() {
-                            assert!(pointee_decl.get_kind() == EntityKind::ObjCInterfaceDecl);
-                            let first_child = children.next().unwrap();
-                            assert_eq!(first_child.get_kind(), EntityKind::ObjCClassRef);
-                            assert_eq!(first_child.get_name(), pointee_decl.get_name());
-                            let second_child_kind = children.peek().unwrap().get_kind();
-                            match second_child_kind {
-                                // TODO: Need refactoring. Maybe can use recursion in some cases.
-                                EntityKind::TypeRef | EntityKind::ObjCClassRef => {
-                                    let mut template_arguments: Vec<ObjCType> = Vec::new();
-                                    'template_args_outer: loop {
-                                        let next_child_kind = match children.peek() {
-                                            None => break 'template_args_outer,
-                                            Some(child) => child.get_kind(),
-                                        };
-                                        match next_child_kind {
-                                            EntityKind::TypeRef => {
-                                                let next_child = children.next().unwrap();
-                                                let definition =
-                                                    next_child.get_definition().unwrap();
-                                                assert_eq!(
-                                                    definition.get_kind(),
-                                                    EntityKind::TemplateTypeParameter
-                                                );
-                                                template_arguments.push(
-                                                    ObjCType::TemplateArgument(
-                                                        next_child.get_name().unwrap(),
-                                                    ),
-                                                );
-                                            }
-                                            EntityKind::ObjCClassRef => {
-                                                let next_child = children.next().unwrap();
-                                                template_arguments.push(ObjCType::ObjCObjPtr(
-                                                    next_child.get_name().unwrap(),
-                                                    Vec::new(), // TODO: Might be non-empty?
-                                                    Vec::new(), // TODO: Might be non-empty?
-                                                ));
-                                            }
-                                            _ => {
-                                                break 'template_args_outer;
-                                            }
-                                        }
-                                    }
-                                    ObjCType::ObjCObjPtr(
-                                        pointee_decl.get_name().unwrap(),
-                                        template_arguments,
-                                        Vec::new(),
-                                    )
-                                }
-                                EntityKind::ObjCProtocolRef => {
-                                    let mut protocol_names: Vec<String> = Vec::new();
-                                    'protocols_outer: loop {
-                                        let next_child_kind = match children.peek() {
-                                            None => break 'protocols_outer,
-                                            Some(child) => child.get_kind(),
-                                        };
-                                        if next_child_kind == EntityKind::ObjCProtocolRef {
+                        let base_entity = children.next().unwrap();
+
+                        let mut template_arguments: Vec<ObjCType> = Vec::new();
+                        let mut protocol_names: Vec<String> = Vec::new();
+
+                        let second_child_kind = children.peek().unwrap().get_kind();
+                        match second_child_kind {
+                            // TODO: Need refactoring. Maybe can use recursion in some cases.
+                            EntityKind::TypeRef | EntityKind::ObjCClassRef => {
+                                'template_args_outer: loop {
+                                    let next_child_kind = match children.peek() {
+                                        None => break 'template_args_outer,
+                                        Some(child) => child.get_kind(),
+                                    };
+                                    match next_child_kind {
+                                        EntityKind::TypeRef => {
                                             let next_child = children.next().unwrap();
-                                            protocol_names.push(next_child.get_name().unwrap());
-                                        } else {
-                                            break;
+                                            let definition = next_child.get_definition().unwrap();
+                                            assert_eq!(
+                                                definition.get_kind(),
+                                                EntityKind::TemplateTypeParameter
+                                            );
+                                            template_arguments.push(ObjCType::TemplateArgument(
+                                                next_child.get_name().unwrap(),
+                                            ));
+                                        }
+                                        EntityKind::ObjCClassRef => {
+                                            let next_child = children.next().unwrap();
+                                            template_arguments.push(ObjCType::ObjCObjPtr(
+                                                next_child.get_name().unwrap(),
+                                                Vec::new(), // TODO: Might be non-empty?
+                                                Vec::new(), // TODO: Might be non-empty?
+                                            ));
+                                        }
+                                        _ => {
+                                            break 'template_args_outer;
                                         }
                                     }
-                                    ObjCType::ObjCObjPtr(
-                                        pointee_decl.get_name().unwrap(),
-                                        Vec::new(),
-                                        protocol_names,
-                                    )
-                                }
-                                _ => {
-                                    panic!("Unexpected second child {:?}", second_child_kind);
                                 }
                             }
+                            EntityKind::ObjCProtocolRef => 'protocols_outer: loop {
+                                let next_child_kind = match children.peek() {
+                                    None => break 'protocols_outer,
+                                    Some(child) => child.get_kind(),
+                                };
+                                if next_child_kind == EntityKind::ObjCProtocolRef {
+                                    let next_child = children.next().unwrap();
+                                    protocol_names.push(next_child.get_name().unwrap());
+                                } else {
+                                    break;
+                                }
+                            },
+                            _ => {
+                                panic!("Unexpected second child {:?}", second_child_kind);
+                            }
+                        }
+                        if base_entity.get_kind() == EntityKind::ObjCClassRef {
+                            ObjCType::ObjCObjPtr(
+                                base_entity.get_name().unwrap(),
+                                template_arguments,
+                                protocol_names,
+                            )
+                        } else if base_entity.get_kind() == EntityKind::TypeRef
+                            && base_entity.get_type().unwrap().get_kind() == TypeKind::ObjCId
+                        {
+                            assert!(template_arguments.is_empty());
+                            ObjCType::Id(protocol_names)
                         } else {
-                            panic!("TypeKind::Unexposed: {:?} -> {:?}", clang_type, pointee);
+                            panic!("Indecipherable TypeKind::Unexposed {:?}", pointee);
                         }
                     }
                     _ => {
@@ -1107,7 +1100,7 @@ mod tests {
             @protocol P1, P2;
             @class B;
             @interface A
-            // - (void)foo:(id<P1, P2>)x;
+            - (void)foo:(id<P1, P2>)x;
             + (void)bar:(B<P2>*)y;
             @end
         ";
@@ -1120,18 +1113,18 @@ mod tests {
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
-                        // ObjCMethod {
-                        //     kind: ObjCMethodKind::InstanceMethod,
-                        //     is_optional: false,
-                        //     sel: "foo:".into(),
-                        //     args: vec![
-                        //         ObjCMethodArg {
-                        //             name: "x".into(),
-                        //             objc_type: ObjCType::Id(vec!["P1".into(), "P2".into()]),
-                        //         },
-                        //     ],
-                        //     ret_type: ObjCType::Void,
-                        // },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo:".into(),
+                            args: vec![
+                                ObjCMethodArg {
+                                    name: "x".into(),
+                                    objc_type: ObjCType::Id(vec!["P1".into(), "P2".into()]),
+                                },
+                            ],
+                            ret_type: ObjCType::Void,
+                        },
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
                             is_optional: false,
