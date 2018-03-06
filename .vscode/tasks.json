@@ -17,7 +17,7 @@
         "echo": true,
         "reveal": "always",
         "focus": true,
-        "panel": "dedicated"
+        "panel": "shared"
       }
     },
     {

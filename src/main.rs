@@ -14,11 +14,14 @@ extern crate tempfile;
 // - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
 // - Do not forget about categories.
 // - instancetype
+// - use .to_owned() instead of .into()
+// - rename project to chocolatier? alchemist?
 
-use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index};
+use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index, TypeKind};
 use clang::diagnostic::Severity;
 use std::process::Command;
 use regex::Regex;
+use std::iter::Peekable;
 
 #[derive(Debug, PartialEq)]
 enum Origin {
@@ -122,37 +125,82 @@ enum ObjCType {
 }
 
 impl ObjCType {
-    fn from(clang_type: &clang::Type) -> ObjCType {
+    fn from(
+        clang_type: &clang::Type,
+        children: &mut Peekable<std::slice::Iter<Entity>>,
+    ) -> ObjCType {
         let kind = clang_type.get_kind();
         match kind {
-            clang::TypeKind::Typedef => ObjCType::from(&clang_type.get_canonical_type()),
-            clang::TypeKind::ObjCObjectPointer => {
+            TypeKind::Typedef => ObjCType::from(&clang_type.get_canonical_type(), children),
+            TypeKind::ObjCObjectPointer => {
                 let pointee = clang_type.get_pointee_type().unwrap();
                 match pointee.get_kind() {
-                    clang::TypeKind::ObjCInterface => {
-                        ObjCType::ObjCObjPtr(pointee.get_display_name(), Vec::new(), Vec::new())
+                    TypeKind::ObjCInterface => {
+                        let type_name = pointee.get_display_name();
+                        let child = children.next().unwrap();
+                        assert!(
+                            child.get_kind() == EntityKind::ObjCClassRef
+                                && child.get_name().unwrap() == type_name
+                        );
+                        ObjCType::ObjCObjPtr(type_name, Vec::new(), Vec::new())
                     }
-                    clang::TypeKind::Unexposed => {
-                        println!(
-                            "---------- Unexposed display name: {:?}",
-                            clang_type.get_display_name()
-                        );
-                        println!(
-                            "---------- template: {:?}",
-                            pointee.get_template_argument_types()
-                        );
-                        if clang_type.get_display_name() == "id" {
-                            ObjCType::Id(Vec::new())
-                        } else if let Some(pointee_decl) = pointee.get_declaration() {
+                    TypeKind::Unexposed => {
+                        if let Some(pointee_decl) = pointee.get_declaration() {
                             assert!(pointee_decl.get_kind() == EntityKind::ObjCInterfaceDecl);
-                            println!("---: pointee: {:?}", pointee_decl);
-                            ObjCType::ObjCObjPtr(
-                                pointee_decl.get_name().unwrap(),
-                                Vec::new(),
-                                Vec::new(),
-                            )
+                            let first_child = children.next().unwrap();
+                            assert!(
+                                first_child.get_kind() == EntityKind::ObjCClassRef
+                                    && first_child.get_name() == pointee_decl.get_name()
+                            );
+                            let second_child_kind = children.peek().unwrap().get_kind();
+                            match second_child_kind {
+                                EntityKind::TypeRef | EntityKind::ObjCClassRef => {
+                                    let mut template_arguments: Vec<ObjCType> = Vec::new();
+                                    'outer: loop {
+                                        let next_child_kind = match children.peek() {
+                                            None => break 'outer,
+                                            Some(child) => child.get_kind(),
+                                        };
+                                        match next_child_kind {
+                                            EntityKind::TypeRef => {
+                                                let next_child = children.next().unwrap();
+                                                let definition =
+                                                    next_child.get_definition().unwrap();
+                                                assert_eq!(
+                                                    definition.get_kind(),
+                                                    EntityKind::TemplateTypeParameter
+                                                );
+                                                template_arguments.push(
+                                                    ObjCType::TemplateArgument(
+                                                        next_child.get_name().unwrap(),
+                                                    ),
+                                                );
+                                            }
+                                            EntityKind::ObjCClassRef => {
+                                                let next_child = children.next().unwrap();
+                                                template_arguments.push(ObjCType::ObjCObjPtr(
+                                                    next_child.get_name().unwrap(),
+                                                    Vec::new(), // TODO: Might be non-empty?
+                                                    Vec::new(), // TODO: Might be non-empty?
+                                                ));
+                                            }
+                                            _ => {
+                                                break 'outer;
+                                            }
+                                        }
+                                    }
+                                    ObjCType::ObjCObjPtr(
+                                        pointee_decl.get_name().unwrap(),
+                                        template_arguments,
+                                        Vec::new(),
+                                    )
+                                }
+                                _ => {
+                                    panic!("Unexpected second child {:?}", second_child_kind);
+                                }
+                            }
                         } else {
-                            panic!("{:?} -> {:?}", clang_type, pointee);
+                            panic!("TypeKind::Unexposed: {:?} -> {:?}", clang_type, pointee);
                         }
                     }
                     _ => {
@@ -177,9 +225,29 @@ impl ObjCType {
                     }
                 }
             }
+            TypeKind::Unexposed => {
+                let child = children
+                    .next()
+                    .expect("No child that could help find what the Unexposed hides");
+                if child.get_kind() != EntityKind::TypeRef {
+                    panic!(
+                        "Unexpected child {:?} when trying to find what an Unexposed hides",
+                        child
+                    )
+                }
+                let definition = child.get_definition().unwrap();
+                if definition.get_kind() != EntityKind::TemplateTypeParameter {
+                    panic!(
+                        "Unexpected child definition {:?} when trying to find what an Unexposed hides",
+                        definition
+                    )
+                }
+
+                ObjCType::TemplateArgument(definition.get_name().unwrap())
+            }
             _ => {
                 println!(
-                    "Unimplement type {:?} - {:?}",
+                    "Unimplemented type {:?} - {:?}",
                     kind,
                     clang_type.get_display_name()
                 );
@@ -198,15 +266,15 @@ struct ObjCMethodArg {
 impl ObjCMethodArg {
     fn from(entity: &Entity) -> ObjCMethodArg {
         assert!(entity.get_kind() == EntityKind::ParmDecl);
-        println!("ParmDecl children: {:?}", entity.get_children());
 
-        if entity.get_type().unwrap().get_kind() == clang::TypeKind::Unexposed {
-            println!("unexposed entity: {:?}", entity);
-        }
-        ObjCMethodArg {
+        let children = entity.get_children();
+        let mut peekable_children = children.iter().peekable();
+        let arg = ObjCMethodArg {
             name: entity.get_name().unwrap(),
-            objc_type: ObjCType::from(&entity.get_type().unwrap()),
-        }
+            objc_type: ObjCType::from(&entity.get_type().unwrap(), &mut peekable_children),
+        };
+        assert!(peekable_children.peek() == None);
+        arg
     }
 }
 
@@ -240,14 +308,20 @@ impl ObjCMethod {
             EntityKind::ObjCClassMethodDecl => ObjCMethodKind::ClassMethod,
             _ => unreachable!(),
         };
-        println!("method children: {:?}", entity.get_children());
-        ObjCMethod {
+        let children = entity.get_children();
+        let mut peekable_children = children.iter().peekable();
+        let method = ObjCMethod {
             kind: kind,
             is_optional: entity.is_objc_optional(),
             sel: entity.get_name().unwrap(),
             args: args.collect(),
-            ret_type: ObjCType::from(&entity.get_result_type().unwrap()),
-        }
+            ret_type: ObjCType::from(&entity.get_result_type().unwrap(), &mut peekable_children),
+        };
+        assert!(
+            peekable_children.peek() == None
+                || peekable_children.peek().unwrap().get_kind() == EntityKind::ParmDecl
+        );
+        method
     }
 
     fn kind(&self) -> ObjCMethodKind {
@@ -312,9 +386,14 @@ impl ObjCClass {
             })
             .map(ObjCMethod::from);
 
+        let template_arguments = children
+            .iter()
+            .filter(|child| child.get_kind() == EntityKind::TemplateTypeParameter)
+            .map(|child| child.get_name().unwrap());
+
         ObjCClass {
             name: entity.get_name().unwrap(),
-            template_arguments: Vec::new(),
+            template_arguments: template_arguments.collect(),
             superclass_name: superclass_name,
             adopted_protocol_names: adopted_protocol_names.collect(),
             methods: methods.collect(),
@@ -324,6 +403,10 @@ impl ObjCClass {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn template_arguments(&self) -> &[String] {
+        &self.template_arguments
     }
 
     fn superclass_name(&self) -> &Option<String> {
@@ -592,6 +675,10 @@ mod tests {
         assert_eq!(parsed_classes.len(), expected_classes.len());
         for (parsed_class, expected_class) in parsed_classes.iter().zip(expected_classes) {
             assert_eq!(parsed_class.name(), expected_class.name());
+            assert_eq!(
+                parsed_class.template_arguments(),
+                expected_class.template_arguments()
+            );
             assert_eq!(
                 parsed_class.superclass_name(),
                 expected_class.superclass_name()
@@ -984,7 +1071,7 @@ mod tests {
             @protocol P1, P2;
             @class B;
             @interface A<__covariant T>
-            - (void)foo:(id<P1, P2>)x;
+            // - (void)foo:(id<P1, P2>)x;
             + (void)bar:(B<P2>*)y;
             @end
         ";
@@ -997,25 +1084,18 @@ mod tests {
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
-                        ObjCMethod {
-                            kind: ObjCMethodKind::InstanceMethod,
-                            is_optional: false,
-                            sel: "foo".into(),
-                            args: vec![],
-                            ret_type: ObjCType::Void,
-                        },
-                        ObjCMethod {
-                            kind: ObjCMethodKind::InstanceMethod,
-                            is_optional: false,
-                            sel: "foo".into(),
-                            args: vec![
-                                ObjCMethodArg {
-                                    name: "x".into(),
-                                    objc_type: ObjCType::Id(vec!["P1".into(), "P2".into()]),
-                                },
-                            ],
-                            ret_type: ObjCType::Void,
-                        },
+                        // ObjCMethod {
+                        //     kind: ObjCMethodKind::InstanceMethod,
+                        //     is_optional: false,
+                        //     sel: "foo".into(),
+                        //     args: vec![
+                        //         ObjCMethodArg {
+                        //             name: "x".into(),
+                        //             objc_type: ObjCType::Id(vec!["P1".into(), "P2".into()]),
+                        //         },
+                        //     ],
+                        //     ret_type: ObjCType::Void,
+                        // },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
