@@ -156,9 +156,9 @@ impl ObjCType {
                             match second_child_kind {
                                 EntityKind::TypeRef | EntityKind::ObjCClassRef => {
                                     let mut template_arguments: Vec<ObjCType> = Vec::new();
-                                    'outer: loop {
+                                    'template_args_outer: loop {
                                         let next_child_kind = match children.peek() {
-                                            None => break 'outer,
+                                            None => break 'template_args_outer,
                                             Some(child) => child.get_kind(),
                                         };
                                         match next_child_kind {
@@ -185,7 +185,7 @@ impl ObjCType {
                                                 ));
                                             }
                                             _ => {
-                                                break 'outer;
+                                                break 'template_args_outer;
                                             }
                                         }
                                     }
@@ -193,6 +193,26 @@ impl ObjCType {
                                         pointee_decl.get_name().unwrap(),
                                         template_arguments,
                                         Vec::new(),
+                                    )
+                                }
+                                EntityKind::ObjCProtocolRef => {
+                                    let mut protocol_names: Vec<String> = Vec::new();
+                                    'protocols_outer: loop {
+                                        let next_child_kind = match children.peek() {
+                                            None => break 'protocols_outer,
+                                            Some(child) => child.get_kind(),
+                                        };
+                                        if next_child_kind == EntityKind::ObjCProtocolRef {
+                                            let next_child = children.next().unwrap();
+                                            protocol_names.push(next_child.get_name().unwrap());
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    ObjCType::ObjCObjPtr(
+                                        pointee_decl.get_name().unwrap(),
+                                        Vec::new(),
+                                        protocol_names,
                                     )
                                 }
                                 _ => {
@@ -245,6 +265,7 @@ impl ObjCType {
 
                 ObjCType::TemplateArgument(definition.get_name().unwrap())
             }
+            TypeKind::Void => ObjCType::Void,
             _ => {
                 println!(
                     "Unimplemented type {:?} - {:?}",
@@ -1070,7 +1091,7 @@ mod tests {
         let source = "
             @protocol P1, P2;
             @class B;
-            @interface A<__covariant T>
+            @interface A
             // - (void)foo:(id<P1, P2>)x;
             + (void)bar:(B<P2>*)y;
             @end
@@ -1080,14 +1101,14 @@ mod tests {
             classes: vec![
                 ObjCClass {
                     name: "A".into(),
-                    template_arguments: vec!["T".into()],
+                    template_arguments: vec![],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
                         // ObjCMethod {
                         //     kind: ObjCMethodKind::InstanceMethod,
                         //     is_optional: false,
-                        //     sel: "foo".into(),
+                        //     sel: "foo:".into(),
                         //     args: vec![
                         //         ObjCMethodArg {
                         //             name: "x".into(),
@@ -1097,12 +1118,12 @@ mod tests {
                         //     ret_type: ObjCType::Void,
                         // },
                         ObjCMethod {
-                            kind: ObjCMethodKind::InstanceMethod,
+                            kind: ObjCMethodKind::ClassMethod,
                             is_optional: false,
-                            sel: "bar".into(),
+                            sel: "bar:".into(),
                             args: vec![
                                 ObjCMethodArg {
-                                    name: "x".into(),
+                                    name: "y".into(),
                                     objc_type: ObjCType::ObjCObjPtr(
                                         "B".into(),
                                         vec![],
