@@ -158,6 +158,8 @@ impl ObjCType {
                         assert_eq!(child.get_name().unwrap(), type_name);
                         ObjCType::ObjCObjPtr(type_name, Vec::new(), Vec::new())
                     }
+                    // libclang is not being very helpful.
+                    // It has no direct way to represent template instanciation or adoption of protocols.
                     TypeKind::Unexposed => {
                         let base_entity = children.next().unwrap();
 
@@ -215,6 +217,7 @@ impl ObjCType {
                                 panic!("Unexpected second child {:?}", second_child_kind);
                             }
                         }
+
                         if base_entity.get_kind() == EntityKind::ObjCClassRef {
                             ObjCType::ObjCObjPtr(
                                 base_entity.get_name().unwrap(),
@@ -229,7 +232,6 @@ impl ObjCType {
                         }
                     }
                     _ => {
-                        // pointee.get_declaration()
                         println!("{:?} -> {:?}", clang_type, pointee);
                         println!(
                             "+++: {:?} -> {:?}",
@@ -327,8 +329,10 @@ struct ObjCMethod {
 impl ObjCMethod {
     fn from(entity: &Entity) -> ObjCMethod {
         assert!(
-            entity.get_kind() == EntityKind::ObjCInstanceMethodDecl
-                || entity.get_kind() == EntityKind::ObjCClassMethodDecl
+            [
+                EntityKind::ObjCInstanceMethodDecl,
+                EntityKind::ObjCClassMethodDecl,
+            ].contains(&entity.get_kind())
         );
         let arg_entities = entity.get_arguments().unwrap();
         let args = arg_entities
@@ -342,7 +346,7 @@ impl ObjCMethod {
         let children = entity.get_children();
         let mut peekable_children = children.iter().peekable();
         let method = ObjCMethod {
-            kind: kind,
+            kind,
             is_optional: entity.is_objc_optional(),
             sel: entity.get_name().unwrap(),
             args: args.collect(),
@@ -412,8 +416,10 @@ impl ObjCClass {
         let methods = children
             .iter()
             .filter(|child| {
-                child.get_kind() == EntityKind::ObjCInstanceMethodDecl
-                    || child.get_kind() == EntityKind::ObjCClassMethodDecl
+                [
+                    EntityKind::ObjCInstanceMethodDecl,
+                    EntityKind::ObjCClassMethodDecl,
+                ].contains(&child.get_kind())
             })
             .map(ObjCMethod::from);
 
@@ -425,7 +431,7 @@ impl ObjCClass {
         ObjCClass {
             name: entity.get_name().unwrap(),
             template_arguments: template_arguments.collect(),
-            superclass_name: superclass_name,
+            superclass_name,
             adopted_protocol_names: adopted_protocol_names.collect(),
             methods: methods.collect(),
             guessed_origin: guess_entity_origin(entity),
@@ -474,8 +480,10 @@ impl ObjCProtocol {
         let methods = children
             .iter()
             .filter(|child| {
-                child.get_kind() == EntityKind::ObjCInstanceMethodDecl
-                    || child.get_kind() == EntityKind::ObjCClassMethodDecl
+                [
+                    EntityKind::ObjCInstanceMethodDecl,
+                    EntityKind::ObjCClassMethodDecl,
+                ].contains(&child.get_kind())
             })
             .map(ObjCMethod::from);
 
@@ -643,7 +651,7 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
     let diagnostics = tu.get_diagnostics();
     let mut errors = diagnostics.iter().filter(|diagnostic| {
         let severity = diagnostic.get_severity();
-        severity == Severity::Error || severity == Severity::Fatal
+        [Severity::Error, Severity::Fatal].contains(&severity)
     });
     if let Some(error) = errors.next() {
         return Err(ParseError::CompilationError(error.get_text()));
@@ -675,6 +683,7 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
 
 fn main() {
     let source = "
+    #import <Foundation/NSArray.h>
     // #import <Foundation/Foundation.h>
         // @protocol X;
         // @protocol Y;
