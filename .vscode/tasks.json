@@ -18,6 +18,11 @@
         "reveal": "always",
         "focus": true,
         "panel": "shared"
+      },
+      "options": {
+        "env": {
+          "RUST_BACKTRACE": "1"
+        }
       }
     },
     {
@@ -46,7 +51,12 @@
       ],
       "problemMatcher": [
         "$rustc"
-      ]
+      ],
+      "options": {
+        "env": {
+          "RUST_BACKTRACE": "1"
+        }
+      }
     }
   ]
 }

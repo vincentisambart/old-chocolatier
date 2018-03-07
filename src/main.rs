@@ -12,9 +12,9 @@ extern crate tempfile;
 // - For args, look for const/inout/out, and nullable/nonnull...
 // - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
 // - Do not forget about categories.
-// - instancetype
 // - use .to_owned() instead of .into()
 // - rename project to chocolatier? alchemist?
+// - BOOL should be mapped to a real boolean
 
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index, TypeKind};
 use clang::diagnostic::Severity;
@@ -120,6 +120,7 @@ enum ObjCType {
     Void,
     ObjCObjPtr(String, Vec<ObjCType>, Vec<String>),
     ObjCId(Vec<String>),
+    ObjCInstancetype,
     ObjCClass,
     TemplateArgument(String),
 }
@@ -134,6 +135,18 @@ fn is_objc_class(entity: &Entity) -> bool {
         && entity.get_type().unwrap().get_kind() == TypeKind::ObjCClass
 }
 
+fn is_objc_instancetype(entity: &Entity) -> bool {
+    if entity.get_kind() != EntityKind::TypeRef {
+        return false;
+    }
+    if entity.get_name().unwrap() != "instancetype" {
+        return false;
+    }
+    let canonical_type = entity.get_type().unwrap().get_canonical_type();
+    canonical_type.get_kind() == TypeKind::ObjCObjectPointer
+        && canonical_type.get_pointee_type().unwrap().get_kind() == TypeKind::Unexposed
+}
+
 impl ObjCType {
     fn from(
         clang_type: &clang::Type,
@@ -143,8 +156,9 @@ impl ObjCType {
         match kind {
             TypeKind::Typedef => {
                 let child = children.next().unwrap();
-                assert_eq!(child.get_kind(), EntityKind::TypeRef);
-                assert_eq!(child.get_name().unwrap(), clang_type.get_display_name());
+                if is_objc_instancetype(child) {
+                    return ObjCType::ObjCInstancetype;
+                }
 
                 let declaration = clang_type.get_declaration().unwrap();
                 let decl_children = declaration.get_children();
@@ -172,6 +186,7 @@ impl ObjCType {
                         let mut template_arguments: Vec<ObjCType> = Vec::new();
                         let mut protocol_names: Vec<String> = Vec::new();
 
+                        println!("base entity: {:?}", base_entity);
                         let second_child_kind = children.peek().unwrap().get_kind();
                         match second_child_kind {
                             // TODO: Need refactoring. Maybe can use recursion in some cases.
@@ -1204,6 +1219,50 @@ mod tests {
                                 },
                             ],
                             ret_type: ObjCType::Void,
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_id_and_instancetype_return_value() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @interface A
+            - (instancetype)foo;
+            + (id)bar;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    template_arguments: vec![],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCInstancetype,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
+                            sel: "bar".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCId(vec![]),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
