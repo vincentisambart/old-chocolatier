@@ -122,6 +122,7 @@ enum ObjCType {
     ObjCId(Vec<String>),
     ObjCInstancetype,
     ObjCClass,
+    ObjCSel,
     TemplateArgument(String),
 }
 
@@ -135,7 +136,13 @@ fn is_objc_class(entity: &Entity) -> bool {
         && entity.get_type().unwrap().get_kind() == TypeKind::ObjCClass
 }
 
+fn is_objc_sel(entity: &Entity) -> bool {
+    entity.get_kind() == EntityKind::TypeRef
+        && entity.get_type().unwrap().get_kind() == TypeKind::ObjCSel
+}
+
 fn is_objc_instancetype(entity: &Entity) -> bool {
+    // There doesn't seem to be a real clean way to check for instancetype...
     if entity.get_kind() != EntityKind::TypeRef {
         return false;
     }
@@ -303,6 +310,11 @@ impl ObjCType {
                 let child = children.next().unwrap();
                 assert!(is_objc_class(child));
                 ObjCType::ObjCClass
+            }
+            TypeKind::ObjCSel => {
+                let child = children.next().unwrap();
+                assert!(is_objc_sel(child));
+                ObjCType::ObjCSel
             }
             _ => {
                 println!(
@@ -1075,42 +1087,6 @@ mod tests {
     }
 
     #[test]
-    fn test_objc_class_return_value() {
-        let clang = Clang::new().expect("Could not load libclang");
-
-        let source = "
-            @interface A
-            - (Class)foo;
-            @end
-        ";
-
-        let expected_decls = ObjCDecls {
-            classes: vec![
-                ObjCClass {
-                    name: "A".into(),
-                    template_arguments: Vec::new(),
-                    superclass_name: None,
-                    adopted_protocol_names: vec![],
-                    methods: vec![
-                        ObjCMethod {
-                            kind: ObjCMethodKind::InstanceMethod,
-                            is_optional: false,
-                            sel: "foo".into(),
-                            args: vec![],
-                            ret_type: ObjCType::ObjCClass,
-                        },
-                    ],
-                    guessed_origin: Origin::Unknown,
-                },
-            ],
-            protocols: vec![],
-        };
-
-        let parsed_decls = parse_objc(&clang, source).unwrap();
-        assert_same_decls(&parsed_decls, &expected_decls);
-    }
-
-    #[test]
     fn test_lightweight_generic() {
         let clang = Clang::new().expect("Could not load libclang");
 
@@ -1232,13 +1208,15 @@ mod tests {
     }
 
     #[test]
-    fn test_id_and_instancetype_return_value() {
+    fn test_custom_objc_types_return_value() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
             @interface A
-            - (instancetype)foo;
-            + (id)bar;
+            - (instancetype)anInstancetype;
+            - (id)anId;
+            - (Class)aClass;
+            - (SEL)aSel;
             @end
         ";
 
@@ -1253,16 +1231,30 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "anInstancetype".into(),
                             args: vec![],
                             ret_type: ObjCType::ObjCInstancetype,
                         },
                         ObjCMethod {
-                            kind: ObjCMethodKind::ClassMethod,
+                            kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "bar".into(),
+                            sel: "anId".into(),
                             args: vec![],
                             ret_type: ObjCType::ObjCId(vec![]),
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "aClass".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCClass,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "aSel".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCSel,
                         },
                     ],
                     guessed_origin: Origin::Unknown,
