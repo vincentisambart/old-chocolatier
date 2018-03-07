@@ -126,22 +126,34 @@ enum ObjCType {
     TemplateArgument(String),
 }
 
-fn is_objc_id(entity: &Entity) -> bool {
-    entity.get_kind() == EntityKind::TypeRef
-        && entity.get_type().unwrap().get_kind() == TypeKind::ObjCId
+fn is_type_objc_id(clang_type: &clang::Type) -> bool {
+    if clang_type.get_kind() == TypeKind::ObjCId {
+        return true;
+    }
+    // In some cases `id`'s type seems to not be TypeKind::ObjCId so check in a more ugly way.
+    if clang_type.get_display_name() != "id" {
+        return false;
+    }
+    clang_type.get_kind() == TypeKind::ObjCObjectPointer
+        && clang_type.get_pointee_type().unwrap().get_kind() == TypeKind::Unexposed
 }
 
-fn is_objc_class(entity: &Entity) -> bool {
+fn is_entity_objc_id(entity: &Entity) -> bool {
+    [EntityKind::TypeRef, EntityKind::TypedefDecl].contains(&entity.get_kind())
+        && is_type_objc_id(&entity.get_type().unwrap())
+}
+
+fn is_entity_objc_class(entity: &Entity) -> bool {
     entity.get_kind() == EntityKind::TypeRef
         && entity.get_type().unwrap().get_kind() == TypeKind::ObjCClass
 }
 
-fn is_objc_sel(entity: &Entity) -> bool {
+fn is_entity_objc_sel(entity: &Entity) -> bool {
     entity.get_kind() == EntityKind::TypeRef
         && entity.get_type().unwrap().get_kind() == TypeKind::ObjCSel
 }
 
-fn is_objc_instancetype(entity: &Entity) -> bool {
+fn is_entity_objc_instancetype(entity: &Entity) -> bool {
     // There doesn't seem to be a real clean way to check for instancetype...
     if entity.get_kind() != EntityKind::TypeRef {
         return false;
@@ -149,9 +161,8 @@ fn is_objc_instancetype(entity: &Entity) -> bool {
     if entity.get_name().unwrap() != "instancetype" {
         return false;
     }
-    let canonical_type = entity.get_type().unwrap().get_canonical_type();
-    canonical_type.get_kind() == TypeKind::ObjCObjectPointer
-        && canonical_type.get_pointee_type().unwrap().get_kind() == TypeKind::Unexposed
+    // In fact the canonical type of `instancetype` is `id` but we want to make the distinction.
+    is_type_objc_id(&entity.get_type().unwrap().get_canonical_type())
 }
 
 impl ObjCType {
@@ -163,7 +174,7 @@ impl ObjCType {
         match kind {
             TypeKind::Typedef => {
                 let child = children.next().unwrap();
-                if is_objc_instancetype(child) {
+                if is_entity_objc_instancetype(child) {
                     return ObjCType::ObjCInstancetype;
                 }
 
@@ -207,13 +218,20 @@ impl ObjCType {
                                         EntityKind::TypeRef => {
                                             let next_child = children.next().unwrap();
                                             let definition = next_child.get_definition().unwrap();
-                                            assert_eq!(
-                                                definition.get_kind(),
-                                                EntityKind::TemplateTypeParameter
-                                            );
-                                            template_arguments.push(ObjCType::TemplateArgument(
-                                                next_child.get_name().unwrap(),
-                                            ));
+                                            if is_entity_objc_id(&definition) {
+                                                template_arguments
+                                                    .push(ObjCType::ObjCId(Vec::new()));
+                                            } else if definition.get_kind()
+                                                == EntityKind::TemplateTypeParameter
+                                            {
+                                                template_arguments.push(
+                                                    ObjCType::TemplateArgument(
+                                                        next_child.get_name().unwrap(),
+                                                    ),
+                                                );
+                                            } else {
+                                                panic!("Unknown definition {:?}", definition);
+                                            }
                                         }
                                         EntityKind::ObjCClassRef => {
                                             let next_child = children.next().unwrap();
@@ -252,7 +270,7 @@ impl ObjCType {
                                 template_arguments,
                                 protocol_names,
                             )
-                        } else if is_objc_id(base_entity) {
+                        } else if is_entity_objc_id(base_entity) {
                             assert!(template_arguments.is_empty());
                             ObjCType::ObjCId(protocol_names)
                         } else {
@@ -303,17 +321,17 @@ impl ObjCType {
             TypeKind::Void => ObjCType::Void,
             TypeKind::ObjCId => {
                 let child = children.next().unwrap();
-                assert!(is_objc_id(child));
+                assert!(is_entity_objc_id(child));
                 ObjCType::ObjCId(Vec::new())
             }
             TypeKind::ObjCClass => {
                 let child = children.next().unwrap();
-                assert!(is_objc_class(child));
+                assert!(is_entity_objc_class(child));
                 ObjCType::ObjCClass
             }
             TypeKind::ObjCSel => {
                 let child = children.next().unwrap();
-                assert!(is_objc_sel(child));
+                assert!(is_entity_objc_sel(child));
                 ObjCType::ObjCSel
             }
             _ => {
@@ -721,28 +739,9 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
 
 fn main() {
     let source = "
-    #import <Foundation/NSArray.h>
-    // #import <Foundation/Foundation.h>
-        // @protocol X;
-        // @protocol Y;
-        // @interface B<__covariant T>
-        // - (T)machin;
-        // @end
-        // @class C;
-        // typedef B<C *> *S;
-        // @interface A
-        // - (C<    /*  _____ ----- - */ X> *)foo:(B<   /*aaa*/ C<  X  , Y> *> *)xxx :(S *)yyy;
-        // @end
-
-@interface I
-@end
-
-typedef I*T;
-
-@interface A
-- (T)foo;
-@end
-
+        @interface B<__covariant T>
+        - (B<B<B*>*>*)m5;
+        @end
     ";
     let clang = Clang::new().expect("Could not load libclang");
     let decls = parse_objc(&clang, source).unwrap();
@@ -1087,22 +1086,28 @@ mod tests {
     }
 
     #[test]
+    // TODO: Mix lightweight generics and protocols.
     fn test_lightweight_generic() {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
-            @class B;
-            @interface A<__covariant T>
-            - (T)foo;
-            - (A<T>*)bar;
-            - (A<B*>*)hoge;
+            @class A;
+            @interface B<__covariant T>
+            - (T)m1;
+            - (B*)m2;
+            - (B<T>*)m3;
+            - (B<A*>*)m4;
+            - (B<B<A*>*>*)m5;
             @end
+            // @interface C<__covariant T, __covariant U>
+            // - (C<C<B<T>*, U>*, B<id>*> *)foo;
+            // @end
         ";
 
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "B".into(),
                     template_arguments: vec!["T".into()],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -1110,17 +1115,24 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "m1".into(),
                             args: vec![],
                             ret_type: ObjCType::TemplateArgument("T".into()),
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "bar".into(),
+                            sel: "m2".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCObjPtr("B".into(), vec![], vec![]),
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "m3".into(),
                             args: vec![],
                             ret_type: ObjCType::ObjCObjPtr(
-                                "A".into(),
+                                "B".into(),
                                 vec![ObjCType::TemplateArgument("T".into())],
                                 vec![],
                             ),
@@ -1128,17 +1140,72 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "hoge".into(),
+                            sel: "m4".into(),
                             args: vec![],
                             ret_type: ObjCType::ObjCObjPtr(
-                                "A".into(),
-                                vec![ObjCType::ObjCObjPtr("B".into(), vec![], vec![])],
+                                "B".into(),
+                                vec![ObjCType::ObjCObjPtr("A".into(), vec![], vec![])],
+                                vec![],
+                            ),
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "m5".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCObjPtr(
+                                "B".into(),
+                                vec![
+                                    ObjCType::ObjCObjPtr(
+                                        "B".into(),
+                                        vec![ObjCType::ObjCObjPtr("A".into(), vec![], vec![])],
+                                        vec![],
+                                    ),
+                                ],
                                 vec![],
                             ),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
                 },
+                // ObjCClass {
+                //     name: "C".into(),
+                //     template_arguments: vec!["T".into(), "U".into()],
+                //     superclass_name: None,
+                //     adopted_protocol_names: vec![],
+                //     methods: vec![
+                //         ObjCMethod {
+                //             kind: ObjCMethodKind::InstanceMethod,
+                //             is_optional: false,
+                //             sel: "foo".into(),
+                //             args: vec![],
+                //             ret_type: ObjCType::ObjCObjPtr(
+                //                 "C".into(),
+                //                 vec![
+                //                     ObjCType::ObjCObjPtr(
+                //                         "C".into(),
+                //                         vec![
+                //                             ObjCType::ObjCObjPtr(
+                //                                 "B".into(),
+                //                                 vec![ObjCType::TemplateArgument("T".into())],
+                //                                 vec![],
+                //                             ),
+                //                             ObjCType::TemplateArgument("U".into()),
+                //                         ],
+                //                         vec![],
+                //                     ),
+                //                     ObjCType::ObjCObjPtr(
+                //                         "B".into(),
+                //                         vec![ObjCType::ObjCId(vec![])],
+                //                         vec![],
+                //                     ),
+                //                 ],
+                //                 vec![],
+                //             ),
+                //         },
+                //     ],
+                //     guessed_origin: Origin::Unknown,
+                // },
             ],
             protocols: vec![],
         };
