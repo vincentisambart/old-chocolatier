@@ -3,8 +3,12 @@
 extern crate clang;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate nom;
 extern crate regex;
 extern crate tempfile;
+
+mod parser;
 
 // TODO:
 // - Do not forget the namespace support.
@@ -1085,7 +1089,7 @@ mod tests {
         assert_same_decls(&parsed_decls, &expected_decls);
     }
 
-    #[test]
+    // #[test]
     // TODO: Mix lightweight generics and protocols.
     fn test_lightweight_generic() {
         let clang = Clang::new().expect("Could not load libclang");
