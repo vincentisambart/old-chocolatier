@@ -1,51 +1,84 @@
 use nom;
 
 #[derive(Debug, PartialEq)]
-enum ObjCUnexposedType {
-    Ptr(Box<ObjCUnexposedType>),
-    Name(String, Vec<ObjCUnexposedType>),
+pub struct ParsedEntity {
+    name: String,
+    conditions: Vec<ParsedEntity>,
+    is_ptr: bool,
+}
+
+impl ParsedEntity {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn conditions(&self) -> &[ParsedEntity] {
+        &self.conditions
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        self.is_ptr
+    }
 }
 
 named!(read_identifier<&str, &str>,
     is_not_s!(" \t\r\n<>,-+*")
 );
 
-named!(read_unqualified_type<&str, ObjCUnexposedType>,
+named!(read_type<&str, ParsedEntity>,
     ws!(
         alt_complete!(
             do_parse!(
-                identifier: read_identifier >>
-                list: delimited!(
+                name: read_identifier >>
+                conditions: delimited!(
                     tag_s!("<"),
-                    separated_list!(tag_s!(","), read_qualified_type),
+                    separated_list!(tag_s!(","), read_type),
                     tag_s!(">")
                 ) >>
-                (ObjCUnexposedType::Name(identifier.to_owned(), list))
+                tag_s!("*") >>
+                (ParsedEntity {
+                    name: name.to_owned(),
+                    conditions,
+                    is_ptr: true
+                })
+            ) |
+            // TODO: Might be able to use conditions (cond!()?) for simplifying things
+            do_parse!(
+                name: read_identifier >>
+                conditions: delimited!(
+                    tag_s!("<"),
+                    separated_list!(tag_s!(","), read_type),
+                    tag_s!(">")
+                ) >>
+                (ParsedEntity {
+                    name: name.to_owned(),
+                    conditions,
+                    is_ptr: false
+                })
             ) |
             do_parse!(
-                identifier: read_identifier >>
-                (ObjCUnexposedType::Name(identifier.to_owned(), Vec::new()))
+                name: read_identifier >>
+                tag_s!("*") >>
+                (ParsedEntity {
+                    name: name.to_owned(),
+                    conditions: Vec::new(),
+                    is_ptr: true
+                })
+            ) |
+            do_parse!(
+                name: read_identifier >>
+                (ParsedEntity {
+                    name: name.to_owned(),
+                    conditions: Vec::new(),
+                    is_ptr: false
+                })
             )
         )
     )
 );
 
-named!(read_qualified_type<&str, ObjCUnexposedType>,
-    ws!(
-        do_parse!(
-            unqualified_type: read_unqualified_type >>
-            res: fold_many0!(
-                tag_s!("*"),
-                unqualified_type,
-                |acc, _| ObjCUnexposedType::Ptr(Box::new(acc))
-            ) >>
-            (res)
-        )
-    )
-);
-
-fn parse_unexposed_type(text: &str) -> Option<ObjCUnexposedType> {
-    match read_qualified_type(text) {
+pub fn parse_unexposed_type(text: &str) -> Option<ParsedEntity> {
+    match read_type(text) {
         nom::IResult::Done("", qualified_type) => Some(qualified_type),
         _ => None,
     }
@@ -59,34 +92,69 @@ mod tests {
     fn test_parse_unexposed_type() {
         assert_eq!(
             parse_unexposed_type("A"),
-            Some(ObjCUnexposedType::Name("A".to_owned(), vec![]))
+            Some(ParsedEntity {
+                name: "A".to_owned(),
+                conditions: vec![],
+                is_ptr: false,
+            })
         );
         assert_eq!(
-            parse_unexposed_type("A*"),
-            Some(ObjCUnexposedType::Ptr(Box::new(ObjCUnexposedType::Name(
-                "A".to_owned(),
-                vec![]
-            ))))
+            parse_unexposed_type("B *   "),
+            Some(ParsedEntity {
+                name: "B".to_owned(),
+                conditions: vec![],
+                is_ptr: true,
+            })
         );
         assert_eq!(parse_unexposed_type("A+"), None);
         assert_eq!(
-            parse_unexposed_type("A<B*, C<X, Y> * >  "),
-            Some(ObjCUnexposedType::Name(
-                "A".to_owned(),
-                vec![
-                    ObjCUnexposedType::Ptr(Box::new(ObjCUnexposedType::Name(
-                        "B".to_owned(),
-                        vec![],
-                    ))),
-                    ObjCUnexposedType::Ptr(Box::new(ObjCUnexposedType::Name(
-                        "C".to_owned(),
-                        vec![
-                            ObjCUnexposedType::Name("X".to_owned(), vec![]),
-                            ObjCUnexposedType::Name("Y".to_owned(), vec![]),
+            parse_unexposed_type("id<A *, B>"),
+            Some(ParsedEntity {
+                name: "id".to_owned(),
+                conditions: vec![
+                    ParsedEntity {
+                        name: "A".to_owned(),
+                        conditions: vec![],
+                        is_ptr: true,
+                    },
+                    ParsedEntity {
+                        name: "B".to_owned(),
+                        conditions: vec![],
+                        is_ptr: false,
+                    },
+                ],
+                is_ptr: false,
+            })
+        );
+        assert_eq!(
+            parse_unexposed_type("A<B*, C<X, Y> * > * "),
+            Some(ParsedEntity {
+                name: "A".to_owned(),
+                conditions: vec![
+                    ParsedEntity {
+                        name: "B".to_owned(),
+                        conditions: vec![],
+                        is_ptr: true,
+                    },
+                    ParsedEntity {
+                        name: "C".to_owned(),
+                        conditions: vec![
+                            ParsedEntity {
+                                name: "X".to_owned(),
+                                conditions: vec![],
+                                is_ptr: false,
+                            },
+                            ParsedEntity {
+                                name: "Y".to_owned(),
+                                conditions: vec![],
+                                is_ptr: false,
+                            },
                         ],
-                    ))),
-                ]
-            ))
+                        is_ptr: true,
+                    },
+                ],
+                is_ptr: true,
+            })
         );
     }
 }
