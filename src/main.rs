@@ -1454,6 +1454,43 @@ mod tests {
     }
 
     #[test]
+    fn test_method_with_attribute() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @interface A
+            - (instancetype)init __attribute__((objc_designated_initializer));
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    template_arguments: vec![],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "init".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCInstancetype,
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+
+    }
+
+    #[test]
     fn test_guess_origin() {
         assert_eq!(guess_origin(""), Origin::Unknown);
         assert_eq!(
