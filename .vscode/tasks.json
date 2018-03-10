@@ -52,6 +52,12 @@
       "problemMatcher": [
         "$rustc"
       ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
       "options": {
         "env": {
           "RUST_BACKTRACE": "1"

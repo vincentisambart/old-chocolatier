@@ -25,7 +25,6 @@ use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index, TypeKind};
 use clang::diagnostic::Severity;
 use std::process::Command;
 use regex::Regex;
-use std::iter::Peekable;
 
 #[derive(Debug, PartialEq)]
 enum Origin {
@@ -128,7 +127,9 @@ enum ObjCType {
     ObjCInstancetype,
     ObjCClass,
     ObjCSel,
+    Ptr(Box<ObjCType>),
     TemplateArgument(String),
+    ULong,
 }
 
 fn is_type_objc_id(clang_type: &clang::Type) -> bool {
@@ -176,12 +177,11 @@ enum MatchedTypePart {
     ObjPtr(String, Vec<MatchedTypePart>),
 }
 
-// TODO: Peekable might be be needed anymore.
 impl ObjCType {
     fn from_parsed_entity(
         base_entity: &Entity,
         parsed_entity: &ParsedEntity,
-        children: &mut Peekable<std::slice::Iter<Entity>>,
+        children: &mut std::slice::Iter<Entity>,
     ) -> ObjCType {
         assert_eq!(parsed_entity.name(), &base_entity.get_name().unwrap());
         assert!([EntityKind::ObjCClassRef, EntityKind::TypeRef].contains(&base_entity.get_kind()));
@@ -227,7 +227,7 @@ impl ObjCType {
 
     fn from_unexposed_type(
         clang_type: &clang::Type,
-        children: &mut Peekable<std::slice::Iter<Entity>>,
+        children: &mut std::slice::Iter<Entity>,
     ) -> ObjCType {
         // libclang is not being very helpful.
         // It has no direct way to represent template instanciation or adoption of protocols.
@@ -244,11 +244,9 @@ impl ObjCType {
         }
     }
 
-    fn from(
-        clang_type: &clang::Type,
-        children: &mut Peekable<std::slice::Iter<Entity>>,
-    ) -> ObjCType {
+    fn from(clang_type: &clang::Type, children: &mut std::slice::Iter<Entity>) -> ObjCType {
         let kind = clang_type.get_kind();
+        println!("type: {:?}", clang_type);
         match kind {
             TypeKind::Typedef => {
                 let child = children.next().unwrap();
@@ -258,10 +256,10 @@ impl ObjCType {
 
                 let declaration = clang_type.get_declaration().unwrap();
                 let decl_children = declaration.get_children();
-                let mut peekable_children = decl_children.iter().peekable();
+                let mut decl_children_iter = decl_children.iter();
                 let objc_type =
-                    ObjCType::from(&clang_type.get_canonical_type(), &mut peekable_children);
-                assert!(peekable_children.peek() == None);
+                    ObjCType::from(&clang_type.get_canonical_type(), &mut decl_children_iter);
+                assert!(decl_children_iter.next() == None);
                 objc_type
             }
             TypeKind::ObjCObjectPointer => {
@@ -313,6 +311,16 @@ impl ObjCType {
                 assert!(is_entity_objc_sel(child));
                 ObjCType::ObjCSel
             }
+            TypeKind::Pointer => ObjCType::Ptr(Box::new(Self::from(
+                &clang_type.get_pointee_type().unwrap(),
+                children,
+            ))),
+            TypeKind::Elaborated => {
+                let child = children.next().unwrap();
+                assert_eq!(child.get_type().unwrap().get_kind(), TypeKind::Record);
+                ObjCType::Void // TODO
+            }
+            TypeKind::ULong => ObjCType::ULong,
             _ => {
                 println!(
                     "Unimplemented type {:?} - {:?}",
@@ -332,16 +340,24 @@ struct ObjCMethodArg {
 }
 
 impl ObjCMethodArg {
-    fn from(entity: &Entity) -> ObjCMethodArg {
+    fn from(entity: &Entity, alternative_children: &mut std::slice::Iter<Entity>) -> ObjCMethodArg {
         assert!(entity.get_kind() == EntityKind::ParmDecl);
 
         let children = entity.get_children();
-        let mut peekable_children = children.iter().peekable();
+        let entity_type = entity.get_type().unwrap();
+        let objc_type = if children.is_empty() {
+            // When the method was generated from a property, the type info is not on the ParmDecl.
+            ObjCType::from(&entity_type, alternative_children)
+        } else {
+            let mut children_iter = children.iter();
+            let objc_type = ObjCType::from(&entity_type, &mut children_iter);
+            assert!(children_iter.next() == None);
+            objc_type
+        };
         let arg = ObjCMethodArg {
             name: entity.get_name().unwrap(),
-            objc_type: ObjCType::from(&entity.get_type().unwrap(), &mut peekable_children),
+            objc_type: objc_type,
         };
-        assert!(peekable_children.peek() == None);
         arg
     }
 }
@@ -361,6 +377,22 @@ struct ObjCMethod {
     ret_type: ObjCType,
 }
 
+fn find_property_at_same_location<'a>(
+    type_entity: &Entity<'a>,
+    searched_for: &Entity,
+) -> Option<Entity<'a>> {
+    assert!(
+        [EntityKind::ObjCInterfaceDecl, EntityKind::ObjCProtocolDecl]
+            .contains(&type_entity.get_kind())
+    );
+    let location = searched_for.get_location().unwrap();
+    let children = type_entity.get_children();
+    children
+        .into_iter()
+        .filter(|sibling| sibling.get_kind() == EntityKind::ObjCPropertyDecl)
+        .find(|sibling| sibling.get_location().unwrap() == location)
+}
+
 impl ObjCMethod {
     fn from(entity: &Entity) -> ObjCMethod {
         assert!(
@@ -370,27 +402,40 @@ impl ObjCMethod {
             ].contains(&entity.get_kind())
         );
         let arg_entities = entity.get_arguments().unwrap();
+        let mut children = entity.get_children();
+        if children.is_empty() {
+            // No children on the method means that either the method doesn't use any complex type, or it's generated from a property.
+            // If it's generated from a property we have to get the children of that property instead.
+            let parent = entity.get_lexical_parent().unwrap();
+            if let Some(property) = find_property_at_same_location(&parent, entity) {
+                children = property.get_children();
+            }
+        }
+        let mut children_iter = children.iter();
+        let ret_type = ObjCType::from(&entity.get_result_type().unwrap(), &mut children_iter);
+
         let args = arg_entities
             .iter()
-            .map(|arg_entity| ObjCMethodArg::from(arg_entity));
+            .map(|arg_entity| ObjCMethodArg::from(arg_entity, &mut children_iter))
+            .collect();
+
         let kind = match entity.get_kind() {
             EntityKind::ObjCInstanceMethodDecl => ObjCMethodKind::InstanceMethod,
             EntityKind::ObjCClassMethodDecl => ObjCMethodKind::ClassMethod,
             _ => unreachable!(),
         };
-        let children = entity.get_children();
-        let mut peekable_children = children.iter().peekable();
+
         let method = ObjCMethod {
             kind,
             is_optional: entity.is_objc_optional(),
             sel: entity.get_name().unwrap(),
-            args: args.collect(),
-            ret_type: ObjCType::from(&entity.get_result_type().unwrap(), &mut peekable_children),
+            args: args,
+            ret_type: ret_type,
         };
-        assert!(
-            peekable_children.peek() == None
-                || peekable_children.peek().unwrap().get_kind() == EntityKind::ParmDecl
-        );
+        assert!({
+            let next_child = children_iter.next();
+            next_child == None || next_child.unwrap().get_kind() == EntityKind::ParmDecl
+        });
         method
     }
 
@@ -579,6 +624,10 @@ fn show_tree(entity: &Entity, indent_level: usize) {
         }
     }
 
+    if let Some(location) = entity.get_location() {
+        println!("{}location: {:?}", indent, location);
+    }
+
     if let Some(arguments) = entity.get_arguments() {
         if !arguments.is_empty() {
             println!("{}arguments:", indent);
@@ -626,6 +675,13 @@ fn show_tree(entity: &Entity, indent_level: usize) {
         println!("{}type: {:?}", indent, clang_type);
     }
 
+    if let Some(typedef_underlying_type) = entity.get_typedef_underlying_type() {
+        println!(
+            "{}typedef underlying type: {:?}",
+            indent, typedef_underlying_type
+        );
+    }
+
     if let Some(visibility) = entity.get_visibility() {
         println!("{}visibility: {:?}", indent, visibility);
     }
@@ -655,6 +711,26 @@ fn show_tree(entity: &Entity, indent_level: usize) {
 
     if let Some(objc_qualifiers) = entity.get_objc_qualifiers() {
         println!("{}objc qualifiers: {:?}", indent, objc_qualifiers);
+    }
+
+    if let Some(objc_attributes) = entity.get_objc_attributes() {
+        println!("{}objc attributes: {:?}", indent, objc_attributes);
+    }
+
+    if let Some(reference) = entity.get_reference() {
+        println!("{}reference: {:?}", indent, reference);
+    }
+
+    if let Some(storage_class) = entity.get_storage_class() {
+        println!("{}storage class: {:?}", indent, storage_class);
+    }
+
+    if let Some(semantic_parent) = entity.get_semantic_parent() {
+        println!("{}semantic parent: {:?}", indent, semantic_parent);
+    }
+
+    if let Some(lexical_parent) = entity.get_lexical_parent() {
+        println!("{}lexical parent: {:?}", indent, lexical_parent);
     }
 
     let children = entity.get_children();
@@ -718,12 +794,7 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
 
 fn main() {
     let source = "
-        @class A;
-        @interface B<__covariant T>
-        @end
-        @interface C<__covariant T, __covariant U>
-        - (C<C<B<T>*, U>*, B<id>*> *)foo;
-        @end
+        #import <Foundation/NSArray.h>
     ";
     let clang = Clang::new().expect("Could not load libclang");
     let decls = parse_objc(&clang, source).unwrap();
@@ -1206,6 +1277,7 @@ mod tests {
             @interface A
             - (void)foo:(id<P1, P2>)x;
             + (void)bar:(B<P2>*)y;
+            - (id<P1, P2>)foobar:(B<P2>*)z;
             @end
         ";
 
@@ -1244,6 +1316,22 @@ mod tests {
                                 },
                             ],
                             ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foobar:".into(),
+                            args: vec![
+                                ObjCMethodArg {
+                                    name: "z".into(),
+                                    objc_type: ObjCType::ObjCObjPtr(
+                                        "B".into(),
+                                        vec![],
+                                        vec!["P2".into()],
+                                    ),
+                                },
+                            ],
+                            ret_type: ObjCType::ObjCId(vec!["P1".into(), "P2".into()]),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
@@ -1304,6 +1392,55 @@ mod tests {
                             sel: "aSel".into(),
                             args: vec![],
                             ret_type: ObjCType::ObjCSel,
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_typedef_property() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            typedef unsigned long usize;
+            @interface A
+            @property (readwrite) usize anUnsignedInteger;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".into(),
+                    template_arguments: vec![],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "anUnsignedInteger".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ULong,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "setAnUnsignedInteger:".into(),
+                            args: vec![
+                                ObjCMethodArg {
+                                    name: "anUnsignedInteger".into(),
+                                    objc_type: ObjCType::ULong,
+                                },
+                            ],
+                            ret_type: ObjCType::Void,
                         },
                     ],
                     guessed_origin: Origin::Unknown,
