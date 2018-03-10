@@ -178,10 +178,10 @@ enum MatchedTypePart {
 }
 
 impl ObjCType {
-    fn from_parsed_entity(
+    fn from_parsed_entity<'a, 'tu: 'a, I: Iterator<Item = &'a Entity<'tu>>>(
         base_entity: &Entity,
         parsed_entity: &ParsedEntity,
-        children: &mut std::slice::Iter<Entity>,
+        children: &mut I,
     ) -> ObjCType {
         assert_eq!(parsed_entity.name(), &base_entity.get_name().unwrap());
         assert!([EntityKind::ObjCClassRef, EntityKind::TypeRef].contains(&base_entity.get_kind()));
@@ -225,9 +225,9 @@ impl ObjCType {
         }
     }
 
-    fn from_unexposed_type(
+    fn from_unexposed_type<'a, 'tu: 'a, I: Iterator<Item = &'a Entity<'tu>>>(
         clang_type: &clang::Type,
-        children: &mut std::slice::Iter<Entity>,
+        children: &mut I,
     ) -> ObjCType {
         // libclang is not being very helpful.
         // It has no direct way to represent template instanciation or adoption of protocols.
@@ -244,7 +244,10 @@ impl ObjCType {
         }
     }
 
-    fn from(clang_type: &clang::Type, children: &mut std::slice::Iter<Entity>) -> ObjCType {
+    fn from<'a, 'tu: 'a, I: Iterator<Item = &'a Entity<'tu>>>(
+        clang_type: &clang::Type,
+        children: &mut I,
+    ) -> ObjCType {
         let kind = clang_type.get_kind();
         println!("type: {:?}", clang_type);
         match kind {
@@ -340,7 +343,10 @@ struct ObjCMethodArg {
 }
 
 impl ObjCMethodArg {
-    fn from(entity: &Entity, alternative_children: &mut std::slice::Iter<Entity>) -> ObjCMethodArg {
+    fn from<'a, 'tu: 'a, I: Iterator<Item = &'a Entity<'tu>>>(
+        entity: &Entity,
+        alternative_children: &mut I,
+    ) -> ObjCMethodArg {
         assert!(entity.get_kind() == EntityKind::ParmDecl);
 
         let children = entity.get_children();
@@ -1487,7 +1493,6 @@ mod tests {
 
         let parsed_decls = parse_objc(&clang, source).unwrap();
         assert_same_decls(&parsed_decls, &expected_decls);
-
     }
 
     #[test]
