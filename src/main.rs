@@ -17,7 +17,6 @@ use parser::ParsedEntity;
 // - For args, look for const/inout/out, and nullable/nonnull...
 // - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
 // - Do not forget about categories.
-// - use .to_owned() instead of .into()
 // - BOOL should be mapped to a real boolean
 // - functions, structs, blocks, enums
 
@@ -39,7 +38,7 @@ fn guess_origin(path: &str) -> Origin {
         static ref FRAMEWORK_PATH_RE: Regex = Regex::new(r"/([^./]+)\.framework/Headers/[^./]+.h\z").unwrap();
     }
     if let Some(caps) = FRAMEWORK_PATH_RE.captures(path) {
-        return Origin::Framework(caps.get(1).unwrap().as_str().into());
+        return Origin::Framework(caps.get(1).unwrap().as_str().to_owned());
     }
 
     lazy_static! {
@@ -50,7 +49,7 @@ fn guess_origin(path: &str) -> Origin {
         if library == "objc" {
             return Origin::ObjCCore;
         } else {
-            return Origin::Library(library.into());
+            return Origin::Library(library.to_owned());
         }
     }
 
@@ -104,7 +103,7 @@ fn sdk_path(sdk: AppleSdk) -> String {
         .output()
         .expect("xcrun command failed to start");
     assert!(output.status.success());
-    String::from_utf8_lossy(&output.stdout).trim().into()
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 #[derive(Debug)]
@@ -892,7 +891,7 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: Vec::new(),
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -900,21 +899,21 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "foo".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
                             is_optional: false,
-                            sel: "bar".into(),
+                            sel: "bar".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "hoge".into(),
+                            sel: "hoge".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
@@ -946,27 +945,27 @@ mod tests {
             classes: vec![],
             protocols: vec![
                 ObjCProtocol {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     adopted_protocol_names: vec![],
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "foo".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
                             is_optional: false,
-                            sel: "bar".into(),
+                            sel: "bar".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: true,
-                            sel: "hoge".into(),
+                            sel: "hoge".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
@@ -998,7 +997,7 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "B".into(),
+                    name: "B".to_owned(),
                     template_arguments: Vec::new(),
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -1006,7 +1005,7 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "foo".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
@@ -1014,22 +1013,22 @@ mod tests {
                     guessed_origin: Origin::Unknown,
                 },
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: Vec::new(),
-                    superclass_name: Some("B".into()),
+                    superclass_name: Some("B".to_owned()),
                     adopted_protocol_names: vec![],
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
                             is_optional: false,
-                            sel: "bar".into(),
+                            sel: "bar".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "hoge".into(),
+                            sel: "hoge".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
@@ -1065,15 +1064,15 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: Vec::new(),
                     superclass_name: None,
-                    adopted_protocol_names: vec!["B".into()],
+                    adopted_protocol_names: vec!["B".to_owned()],
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "hoge".into(),
+                            sel: "hoge".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
@@ -1083,13 +1082,13 @@ mod tests {
             ],
             protocols: vec![
                 ObjCProtocol {
-                    name: "C".into(),
+                    name: "C".to_owned(),
                     adopted_protocol_names: vec![],
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "foo".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
@@ -1097,13 +1096,13 @@ mod tests {
                     guessed_origin: Origin::Unknown,
                 },
                 ObjCProtocol {
-                    name: "B".into(),
-                    adopted_protocol_names: vec!["C".into()],
+                    name: "B".to_owned(),
+                    adopted_protocol_names: vec!["C".to_owned()],
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "bar".into(),
+                            sel: "bar".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::Void,
                         },
@@ -1130,7 +1129,7 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: Vec::new(),
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -1138,9 +1137,9 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "foo".to_owned(),
                             args: vec![],
-                            ret_type: ObjCType::ObjCObjPtr("A".into(), Vec::new(), Vec::new()),
+                            ret_type: ObjCType::ObjCObjPtr("A".to_owned(), Vec::new(), Vec::new()),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
@@ -1175,58 +1174,58 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "B".into(),
-                    template_arguments: vec!["T".into()],
+                    name: "B".to_owned(),
+                    template_arguments: vec!["T".to_owned()],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "m1".into(),
+                            sel: "m1".to_owned(),
                             args: vec![],
-                            ret_type: ObjCType::TemplateArgument("T".into()),
+                            ret_type: ObjCType::TemplateArgument("T".to_owned()),
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "m2".into(),
+                            sel: "m2".to_owned(),
                             args: vec![],
-                            ret_type: ObjCType::ObjCObjPtr("B".into(), vec![], vec![]),
+                            ret_type: ObjCType::ObjCObjPtr("B".to_owned(), vec![], vec![]),
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "m3".into(),
+                            sel: "m3".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCObjPtr(
-                                "B".into(),
-                                vec![ObjCType::TemplateArgument("T".into())],
+                                "B".to_owned(),
+                                vec![ObjCType::TemplateArgument("T".to_owned())],
                                 vec![],
                             ),
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "m4".into(),
+                            sel: "m4".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCObjPtr(
-                                "B".into(),
-                                vec![ObjCType::ObjCObjPtr("A".into(), vec![], vec![])],
+                                "B".to_owned(),
+                                vec![ObjCType::ObjCObjPtr("A".to_owned(), vec![], vec![])],
                                 vec![],
                             ),
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "m5".into(),
+                            sel: "m5".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCObjPtr(
-                                "B".into(),
+                                "B".to_owned(),
                                 vec![
                                     ObjCType::ObjCObjPtr(
-                                        "B".into(),
-                                        vec![ObjCType::ObjCObjPtr("A".into(), vec![], vec![])],
+                                        "B".to_owned(),
+                                        vec![ObjCType::ObjCObjPtr("A".to_owned(), vec![], vec![])],
                                         vec![],
                                     ),
                                 ],
@@ -1237,33 +1236,33 @@ mod tests {
                     guessed_origin: Origin::Unknown,
                 },
                 ObjCClass {
-                    name: "C".into(),
-                    template_arguments: vec!["T".into(), "U".into()],
+                    name: "C".to_owned(),
+                    template_arguments: vec!["T".to_owned(), "U".to_owned()],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo".into(),
+                            sel: "foo".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCObjPtr(
-                                "C".into(),
+                                "C".to_owned(),
                                 vec![
                                     ObjCType::ObjCObjPtr(
-                                        "C".into(),
+                                        "C".to_owned(),
                                         vec![
                                             ObjCType::ObjCObjPtr(
-                                                "B".into(),
-                                                vec![ObjCType::TemplateArgument("T".into())],
+                                                "B".to_owned(),
+                                                vec![ObjCType::TemplateArgument("T".to_owned())],
                                                 vec![],
                                             ),
-                                            ObjCType::TemplateArgument("U".into()),
+                                            ObjCType::TemplateArgument("U".to_owned()),
                                         ],
                                         vec![],
                                     ),
                                     ObjCType::ObjCObjPtr(
-                                        "B".into(),
+                                        "B".to_owned(),
                                         vec![ObjCType::ObjCId(vec![])],
                                         vec![],
                                     ),
@@ -1299,7 +1298,7 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: vec![],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -1307,11 +1306,14 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foo:".into(),
+                            sel: "foo:".to_owned(),
                             args: vec![
                                 ObjCMethodArg {
-                                    name: "x".into(),
-                                    objc_type: ObjCType::ObjCId(vec!["P1".into(), "P2".into()]),
+                                    name: "x".to_owned(),
+                                    objc_type: ObjCType::ObjCId(vec![
+                                        "P1".to_owned(),
+                                        "P2".to_owned(),
+                                    ]),
                                 },
                             ],
                             ret_type: ObjCType::Void,
@@ -1319,14 +1321,14 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
                             is_optional: false,
-                            sel: "bar:".into(),
+                            sel: "bar:".to_owned(),
                             args: vec![
                                 ObjCMethodArg {
-                                    name: "y".into(),
+                                    name: "y".to_owned(),
                                     objc_type: ObjCType::ObjCObjPtr(
-                                        "B".into(),
+                                        "B".to_owned(),
                                         vec![],
-                                        vec!["P2".into()],
+                                        vec!["P2".to_owned()],
                                     ),
                                 },
                             ],
@@ -1335,18 +1337,18 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "foobar:".into(),
+                            sel: "foobar:".to_owned(),
                             args: vec![
                                 ObjCMethodArg {
-                                    name: "z".into(),
+                                    name: "z".to_owned(),
                                     objc_type: ObjCType::ObjCObjPtr(
-                                        "B".into(),
+                                        "B".to_owned(),
                                         vec![],
-                                        vec!["P2".into()],
+                                        vec!["P2".to_owned()],
                                     ),
                                 },
                             ],
-                            ret_type: ObjCType::ObjCId(vec!["P1".into(), "P2".into()]),
+                            ret_type: ObjCType::ObjCId(vec!["P1".to_owned(), "P2".to_owned()]),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
@@ -1375,7 +1377,7 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: vec![],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -1383,28 +1385,28 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "anInstancetype".into(),
+                            sel: "anInstancetype".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCInstancetype,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "anId".into(),
+                            sel: "anId".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCId(vec![]),
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "aClass".into(),
+                            sel: "aClass".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCClass,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "aSel".into(),
+                            sel: "aSel".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCSel,
                         },
@@ -1434,7 +1436,7 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: vec![],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -1442,17 +1444,17 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "anUnsignedInteger".into(),
+                            sel: "anUnsignedInteger".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ULong,
                         },
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "setAnUnsignedInteger:".into(),
+                            sel: "setAnUnsignedInteger:".to_owned(),
                             args: vec![
                                 ObjCMethodArg {
-                                    name: "anUnsignedInteger".into(),
+                                    name: "anUnsignedInteger".to_owned(),
                                     objc_type: ObjCType::ULong,
                                 },
                             ],
@@ -1461,7 +1463,7 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "anUnsignedIntegerWithAvailability".into(),
+                            sel: "anUnsignedIntegerWithAvailability".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ULong,
                         },
@@ -1489,7 +1491,7 @@ mod tests {
         let expected_decls = ObjCDecls {
             classes: vec![
                 ObjCClass {
-                    name: "A".into(),
+                    name: "A".to_owned(),
                     template_arguments: vec![],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
@@ -1497,7 +1499,7 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::InstanceMethod,
                             is_optional: false,
-                            sel: "init".into(),
+                            sel: "init".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCInstancetype,
                         },
@@ -1517,11 +1519,11 @@ mod tests {
         assert_eq!(guess_origin(""), Origin::Unknown);
         assert_eq!(
             guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/System/Library/Frameworks/Foundation.framework/Headers/NSValue.h"),
-            Origin::Framework("Foundation".into()),
+            Origin::Framework("Foundation".to_owned()),
         );
         assert_eq!(
             guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/System/Library/Frameworks/Metal.framework/Headers/MTLCaptureManager.h"),
-            Origin::Framework("Metal".into()),
+            Origin::Framework("Metal".to_owned()),
         );
         assert_eq!(
             guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/usr/include/objc/NSObject.h"),
@@ -1529,11 +1531,11 @@ mod tests {
         );
         assert_eq!(
             guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/usr/include/dispatch/object.h"),
-            Origin::Library("dispatch".into()),
+            Origin::Library("dispatch".to_owned()),
         );
         assert_eq!(
             guess_origin("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk/usr/include/dispatch/queue.h"),
-            Origin::Library("dispatch".into()),
+            Origin::Library("dispatch".to_owned()),
         );
     }
 }
