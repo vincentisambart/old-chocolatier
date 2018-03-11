@@ -409,15 +409,24 @@ impl ObjCMethod {
         );
         let arg_entities = entity.get_arguments().unwrap();
         let mut children = entity.get_children();
-        if children.is_empty() {
-            // No children on the method means that either the method doesn't use any complex type, or it's generated from a property.
+        if !children
+            .iter()
+            .any(|child| child.get_kind() != EntityKind::ParmDecl)
+        {
+            // No (non-ParmDecl) children on the method means that either the method doesn't use any complex type, or it's generated from a property.
             // If it's generated from a property we have to get the children of that property instead.
             let parent = entity.get_lexical_parent().unwrap();
             if let Some(property) = find_property_at_same_location(&parent, entity) {
                 children = property.get_children();
             }
         }
-        let mut children_iter = children.iter();
+        let mut children_iter = children.iter().filter(|child| {
+            [
+                EntityKind::ObjCClassRef,
+                EntityKind::TypeRef,
+                EntityKind::ObjCProtocolRef,
+            ].contains(&child.get_kind())
+        });
         let ret_type = ObjCType::from(&entity.get_result_type().unwrap(), &mut children_iter);
 
         let args = arg_entities
@@ -438,10 +447,7 @@ impl ObjCMethod {
             args: args,
             ret_type: ret_type,
         };
-        assert!({
-            let next_child = children_iter.next();
-            next_child == None || next_child.unwrap().get_kind() == EntityKind::ParmDecl
-        });
+        assert!(children_iter.next() == None);
         method
     }
 
