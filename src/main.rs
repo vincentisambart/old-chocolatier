@@ -18,8 +18,8 @@ use parser::ParsedEntity;
 // - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
 // - Do not forget about categories.
 // - use .to_owned() instead of .into()
-// - rename project to chocolatier? alchemist?
 // - BOOL should be mapped to a real boolean
+// - functions, structs, blocks, enums
 
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index, TypeKind};
 use clang::diagnostic::Severity;
@@ -409,11 +409,14 @@ impl ObjCMethod {
         );
         let arg_entities = entity.get_arguments().unwrap();
         let mut children = entity.get_children();
-        if !children
-            .iter()
-            .any(|child| child.get_kind() != EntityKind::ParmDecl)
-        {
-            // No (non-ParmDecl) children on the method means that either the method doesn't use any complex type, or it's generated from a property.
+        if !children.iter().any(|child| {
+            [
+                EntityKind::ObjCClassRef,
+                EntityKind::TypeRef,
+                EntityKind::ObjCProtocolRef,
+            ].contains(&child.get_kind())
+        }) {
+            // No type children on the method means that either the method doesn't use any complex type, or it's generated from a property.
             // If it's generated from a property we have to get the children of that property instead.
             let parent = entity.get_lexical_parent().unwrap();
             if let Some(property) = find_property_at_same_location(&parent, entity) {
@@ -1424,6 +1427,7 @@ mod tests {
             typedef unsigned long usize;
             @interface A
             @property (readwrite) usize anUnsignedInteger;
+            @property (readonly) usize anUnsignedIntegerWithAvailability __attribute__((availability(macos,introduced=10.4)));
             @end
         ";
 
@@ -1453,6 +1457,13 @@ mod tests {
                                 },
                             ],
                             ret_type: ObjCType::Void,
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "anUnsignedIntegerWithAvailability".into(),
+                            args: vec![],
+                            ret_type: ObjCType::ULong,
                         },
                     ],
                     guessed_origin: Origin::Unknown,
