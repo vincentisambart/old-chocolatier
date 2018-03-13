@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Vincent Isambart <vincent.isambart@gmail.com>"]
 
 [dependencies]
-clang = { version = "0.18", features = ["runtime", "clang_5_0"] }
+clang = { version = "0.19", features = ["runtime", "clang_5_0"] }
 lazy_static = "1.0"
 nom = "3.2.1"
 quote = "0.3.15"
