@@ -19,6 +19,8 @@ use parser::ParsedEntity;
 // - Do not forget about categories.
 // - BOOL should be mapped to a real boolean
 // - functions, structs, blocks, enums
+// - add way to check if optional method can be called to protocols
+// - only be able to call method of a certain OS version if running on that OS version (something like if #available, probably doable properly using the type system)
 
 use clang::{Clang, Entity, EntityKind, EntityVisitResult, Index, TypeKind};
 use clang::diagnostic::Severity;
@@ -119,6 +121,18 @@ impl From<clang::SourceError> for ParseError {
 }
 
 #[derive(Debug, PartialEq)]
+struct FnDecl {
+    args: Vec<(Option<String>, ObjCType)>,
+    ret_type: ObjCType,
+    is_variadic: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct StructDecl {
+    fields: Vec<(String, ObjCType)>,
+}
+
+#[derive(Debug, PartialEq)]
 enum ObjCType {
     Void,
     ObjCObjPtr(String, Vec<ObjCType>, Vec<String>),
@@ -126,6 +140,8 @@ enum ObjCType {
     ObjCInstancetype,
     ObjCClass,
     ObjCSel,
+    FnPtr(Box<FnDecl>),
+    Struct(StructDecl),
     Ptr(Box<ObjCType>),
     TemplateArgument(String),
     ULong,
@@ -317,6 +333,9 @@ impl ObjCType {
                 &clang_type.get_pointee_type().unwrap(),
                 children,
             ))),
+            TypeKind::FunctionPrototype => {
+                ObjCType::Void // TODO
+            }
             TypeKind::Elaborated => {
                 let child = children.next().unwrap();
                 assert_eq!(child.get_type().unwrap().get_kind(), TypeKind::Record);
@@ -1502,6 +1521,48 @@ mod tests {
                             sel: "init".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::ObjCInstancetype,
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_function_pointer_return_value() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+// TODO: Add test with typedefed function pointer
+        let source = "
+            typedef unsigned long usize;
+            @interface A
+            + (usize(*)(id, ...))fnPtr;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".to_owned(),
+                    template_arguments: vec![],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
+                            sel: "fnPtr".to_owned(),
+                            args: vec![],
+                            ret_type: ObjCType::FnPtr(Box::new(FnDecl {
+                                args: vec![(None, ObjCType::ObjCId(vec![]))],
+                                ret_type: ObjCType::ObjCObjPtr("A".to_owned(), vec![], vec![]),
+                                is_variadic: true,
+                            })),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
