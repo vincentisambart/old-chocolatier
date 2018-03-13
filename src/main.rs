@@ -378,11 +378,10 @@ impl ObjCMethodArg {
             assert!(children_iter.next() == None);
             objc_type
         };
-        let arg = ObjCMethodArg {
+        ObjCMethodArg {
             name: entity.get_name().unwrap(),
-            objc_type: objc_type,
-        };
-        arg
+            objc_type,
+        }
     }
 }
 
@@ -465,8 +464,8 @@ impl ObjCMethod {
             kind,
             is_optional: entity.is_objc_optional(),
             sel: entity.get_name().unwrap(),
-            args: args,
-            ret_type: ret_type,
+            args,
+            ret_type,
         };
         assert!(children_iter.next() == None);
         method
