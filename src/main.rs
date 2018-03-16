@@ -334,10 +334,25 @@ impl ObjCType {
             TypeKind::Pointer => {
                 let pointee_type = clang_type.get_pointee_type().unwrap();
                 match pointee_type.get_result_type() {
-                    Some(result_type) if pointee_type.get_kind() == TypeKind::Unexposed => {
+                    Some(result_type)
+                        if [TypeKind::Unexposed, TypeKind::FunctionPrototype]
+                            .contains(&pointee_type.get_kind()) =>
+                    {
                         let ret_type = Self::from(&result_type, children);
                         let mut args: Vec<(Option<String>, ObjCType)> = Vec::new();
                         let arg_count = pointee_type.get_argument_types().unwrap().len();
+                        if arg_count > 0 {
+                            // Very ugly hack, due to if a FunctionPrototype returns a typedef for some reason result_type is the expanded type...?
+                            let mut should_skip_next = false;
+                            if let Some(next_child) = children.peek() {
+                                if next_child.get_kind() == EntityKind::TypeRef {
+                                    should_skip_next = true;
+                                }
+                            }
+                            if should_skip_next {
+                                children.next();
+                            }
+                        }
                         for _ in 0..arg_count {
                             let arg_entity = children.next().unwrap();
                             assert_eq!(arg_entity.get_kind(), EntityKind::ParmDecl);
@@ -358,9 +373,6 @@ impl ObjCType {
                     }
                     _ => ObjCType::Ptr(Box::new(Self::from(&pointee_type, children))),
                 }
-            }
-            TypeKind::FunctionPrototype => {
-                ObjCType::Void // TODO
             }
             TypeKind::Elaborated => {
                 let child = children.next().unwrap();
@@ -892,11 +904,7 @@ fn parse_objc(clang: &Clang, source: &str) -> Result<ObjCDecls, ParseError> {
 
 fn main() {
     let source = "
-        // #import <Foundation/NSArray.h>
-        @protocol P1, P2;
-        @interface A
-        - (void)foo:(id<P1, P2>)x;
-        @end
+        #import <Foundation/NSArray.h>
     ";
     let clang = Clang::new().expect("Could not load libclang");
     let decls = parse_objc(&clang, source).unwrap();
@@ -1609,8 +1617,10 @@ mod tests {
         // TODO: Add test with typedefed function pointer
         let source = "
             typedef unsigned long usize;
+            typedef usize(*FN_PTR)(id, ...);
             @interface A
-            + (usize(*)(id, ...))fnPtr;
+            + (usize(*)(id, ...))directFnPtr;
+            + (FN_PTR)typedefedFnPtr;
             @end
         ";
 
@@ -1625,7 +1635,18 @@ mod tests {
                         ObjCMethod {
                             kind: ObjCMethodKind::ClassMethod,
                             is_optional: false,
-                            sel: "fnPtr".to_owned(),
+                            sel: "directFnPtr".to_owned(),
+                            args: vec![],
+                            ret_type: ObjCType::FnPtr(Box::new(FnDecl {
+                                args: vec![(None, ObjCType::ObjCId(vec![]))],
+                                ret_type: ObjCType::ULong,
+                                is_variadic: true,
+                            })),
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
+                            sel: "typedefedFnPtr".to_owned(),
                             args: vec![],
                             ret_type: ObjCType::FnPtr(Box::new(FnDecl {
                                 args: vec![(None, ObjCType::ObjCId(vec![]))],
