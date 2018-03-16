@@ -366,8 +366,8 @@ impl ObjCType {
                             args.push(arg);
                         }
                         ObjCType::FnPtr(Box::new(FnDecl {
-                            args: args,
-                            ret_type: ret_type,
+                            args,
+                            ret_type,
                             is_variadic: pointee_type.is_variadic(),
                         }))
                     }
@@ -511,8 +511,8 @@ impl ObjCMethod {
             );
 
             // When it's generated from a property, no real child on the method's entity.
-            for ref source_arg in entity.get_arguments().unwrap() {
-                let arg = ObjCMethodArg::from(source_arg, &mut property_children_peekable);
+            for source_arg in entity.get_arguments().unwrap() {
+                let arg = ObjCMethodArg::from(&source_arg, &mut property_children_peekable);
                 args.push(arg);
             }
             assert_eq!(property_children_peekable.peek(), None);
