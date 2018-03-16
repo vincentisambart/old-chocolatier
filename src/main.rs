@@ -278,7 +278,7 @@ impl ObjCType {
                 let mut decl_children_iter = decl_children.iter().peekable();
                 let objc_type =
                     ObjCType::from(&clang_type.get_canonical_type(), &mut decl_children_iter);
-                assert!(decl_children_iter.next() == None);
+                assert_eq!(decl_children_iter.peek(), None);
                 objc_type
             }
             TypeKind::ObjCObjectPointer => {
@@ -340,7 +340,7 @@ impl ObjCType {
                         let arg_count = pointee_type.get_argument_types().unwrap().len();
                         for _ in 0..arg_count {
                             let arg_entity = children.next().unwrap();
-                            assert!(arg_entity.get_kind() == EntityKind::ParmDecl);
+                            assert_eq!(arg_entity.get_kind(), EntityKind::ParmDecl);
                             let arg_entity_type = arg_entity.get_type().unwrap();
                             let arg_children = arg_entity.get_children();
                             let mut arg_children_peekable = arg_children.iter().peekable();
@@ -391,7 +391,7 @@ impl ObjCMethodArg {
         entity: &Entity,
         children: &mut Peekable<I>,
     ) -> ObjCMethodArg {
-        assert!(entity.get_kind() == EntityKind::ParmDecl);
+        assert_eq!(entity.get_kind(), EntityKind::ParmDecl);
         let entity_type = entity.get_type().unwrap();
         let objc_type = ObjCType::from(&entity_type, children);
         assert_eq!(children.peek(), None);
