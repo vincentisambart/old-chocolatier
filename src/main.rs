@@ -391,11 +391,11 @@ impl ObjCType {
                     ObjCType::Ptr(Box::new(Self::from(&pointee_type, children)))
                 }
             }
-            TypeKind::Elaborated => {
-                let child = children.next().unwrap();
-                assert_eq!(child.get_type().unwrap().get_kind(), TypeKind::Record);
-                ObjCType::Void // TODO
-            }
+            // TypeKind::Elaborated => {
+            //     let child = children.next().unwrap();
+            //     assert_eq!(child.get_type().unwrap().get_kind(), TypeKind::Record);
+            //     ObjCType::Void // TODO
+            // }
             TypeKind::ULong => ObjCType::ULong,
             TypeKind::BlockPointer => {
                 let callable_decl =
@@ -1466,6 +1466,83 @@ mod tests {
                                 },
                             ],
                             ret_type: ObjCType::ObjCId(vec!["P1".to_owned(), "P2".to_owned()]),
+                        },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_lightweight_generic_and_protocols() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            @protocol Ambiguous, P1;
+            @class Ambiguous;
+            @class A;
+            @interface B<__covariant T>
+            @end
+            @interface C<__covariant T, __covariant U>
+            - (C<C<B<Ambiguous*><Ambiguous>*, U>*, B<id<P1>>*> *)foo;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "B".to_owned(),
+                    template_arguments: vec!["T".to_owned()],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![],
+                    guessed_origin: Origin::Unknown,
+                },
+                ObjCClass {
+                    name: "C".to_owned(),
+                    template_arguments: vec!["T".to_owned(), "U".to_owned()],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "foo".to_owned(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCObjPtr(
+                                "C".to_owned(),
+                                vec![
+                                    ObjCType::ObjCObjPtr(
+                                        "C".to_owned(),
+                                        vec![
+                                            ObjCType::ObjCObjPtr(
+                                                "B".to_owned(),
+                                                vec![
+                                                    ObjCType::ObjCObjPtr(
+                                                        "Ambiguous".to_owned(),
+                                                        vec![],
+                                                        vec![],
+                                                    ),
+                                                ],
+                                                vec!["Ambiguous".to_owned()],
+                                            ),
+                                            ObjCType::TemplateArgument("U".to_owned()),
+                                        ],
+                                        vec![],
+                                    ),
+                                    ObjCType::ObjCObjPtr(
+                                        "B".to_owned(),
+                                        vec![ObjCType::ObjCId(vec!["P1".to_owned()])],
+                                        vec![],
+                                    ),
+                                ],
+                                vec![],
+                            ),
                         },
                     ],
                     guessed_origin: Origin::Unknown,
