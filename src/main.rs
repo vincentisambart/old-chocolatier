@@ -18,7 +18,8 @@ use parser::ParsedEntity;
 // - Maybe convert ObjC errors (and/or exceptions) to Rust errors.
 // - Do not forget about categories.
 // - BOOL should be mapped to a real boolean
-// - functions, structs, blocks, enums
+// - structs, enums
+// - maybe stop using children to get types as it's too brittle (but only once there are tests for all data structures)
 // - add way to check if optional method can be called to protocols
 // - only be able to call method of a certain OS version if running on that OS version (something like if #available, probably doable properly using the type system)
 
@@ -122,7 +123,7 @@ impl From<clang::SourceError> for ParseError {
 }
 
 #[derive(Debug, PartialEq)]
-struct FnDecl {
+struct CallableDecl {
     args: Vec<(Option<String>, ObjCType)>,
     ret_type: ObjCType,
     is_variadic: bool,
@@ -141,7 +142,8 @@ enum ObjCType {
     ObjCInstancetype,
     ObjCClass,
     ObjCSel,
-    FnPtr(Box<FnDecl>),
+    FnPtr(Box<CallableDecl>),
+    BlockPtr(Box<CallableDecl>),
     Struct(StructDecl),
     Ptr(Box<ObjCType>),
     TemplateArgument(String),
@@ -365,7 +367,7 @@ impl ObjCType {
                             let arg = (arg_entity.get_name(), arg_objc_type);
                             args.push(arg);
                         }
-                        ObjCType::FnPtr(Box::new(FnDecl {
+                        ObjCType::FnPtr(Box::new(CallableDecl {
                             args,
                             ret_type,
                             is_variadic: pointee_type.is_variadic(),
@@ -381,12 +383,11 @@ impl ObjCType {
             }
             TypeKind::ULong => ObjCType::ULong,
             _ => {
-                println!(
+                panic!(
                     "Unimplemented type {:?} - {:?}",
                     kind,
                     clang_type.get_display_name()
                 );
-                ObjCType::Void
             }
         }
     }
@@ -1614,7 +1615,6 @@ mod tests {
     fn test_function_pointer_return_value() {
         let clang = Clang::new().expect("Could not load libclang");
 
-        // TODO: Add test with typedefed function pointer
         let source = "
             typedef unsigned long usize;
             typedef usize(*FN_PTR)(id, ...);
@@ -1637,7 +1637,7 @@ mod tests {
                             is_optional: false,
                             sel: "directFnPtr".to_owned(),
                             args: vec![],
-                            ret_type: ObjCType::FnPtr(Box::new(FnDecl {
+                            ret_type: ObjCType::FnPtr(Box::new(CallableDecl {
                                 args: vec![(None, ObjCType::ObjCId(vec![]))],
                                 ret_type: ObjCType::ULong,
                                 is_variadic: true,
@@ -1648,12 +1648,66 @@ mod tests {
                             is_optional: false,
                             sel: "typedefedFnPtr".to_owned(),
                             args: vec![],
-                            ret_type: ObjCType::FnPtr(Box::new(FnDecl {
+                            ret_type: ObjCType::FnPtr(Box::new(CallableDecl {
                                 args: vec![(None, ObjCType::ObjCId(vec![]))],
                                 ret_type: ObjCType::ULong,
                                 is_variadic: true,
                             })),
                         },
+                    ],
+                    guessed_origin: Origin::Unknown,
+                },
+            ],
+            protocols: vec![],
+        };
+
+        let parsed_decls = parse_objc(&clang, source).unwrap();
+        assert_same_decls(&parsed_decls, &expected_decls);
+    }
+
+    #[test]
+    fn test_block_ptr_return_value() {
+        let clang = Clang::new().expect("Could not load libclang");
+
+        let source = "
+            typedef unsigned long usize;
+            // typedef usize(^BLOCK_PTR)(id, ...);
+            @interface A
+            + (usize(^)(id, ...))directBlockPtr;
+            // + (BLOCK_PTR)typedefedBlockPtr;
+            @end
+        ";
+
+        let expected_decls = ObjCDecls {
+            classes: vec![
+                ObjCClass {
+                    name: "A".to_owned(),
+                    template_arguments: vec![],
+                    superclass_name: None,
+                    adopted_protocol_names: vec![],
+                    methods: vec![
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
+                            sel: "directBlockPtr".to_owned(),
+                            args: vec![],
+                            ret_type: ObjCType::BlockPtr(Box::new(CallableDecl {
+                                args: vec![(None, ObjCType::ObjCId(vec![]))],
+                                ret_type: ObjCType::ULong,
+                                is_variadic: true,
+                            })),
+                        },
+                        // ObjCMethod {
+                        //     kind: ObjCMethodKind::ClassMethod,
+                        //     is_optional: false,
+                        //     sel: "typedefedBlockPtr".to_owned(),
+                        //     args: vec![],
+                        //     ret_type: ObjCType::Block(Box::new(CallableDecl {
+                        //         args: vec![(None, ObjCType::ObjCId(vec![]))],
+                        //         ret_type: ObjCType::ULong,
+                        //         is_variadic: true,
+                        //     })),
+                        // },
                     ],
                     guessed_origin: Origin::Unknown,
                 },
