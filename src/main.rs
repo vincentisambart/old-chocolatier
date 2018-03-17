@@ -129,6 +129,53 @@ struct CallableDecl {
     is_variadic: bool,
 }
 
+impl CallableDecl {
+    fn from_type<'a, 'tu: 'a, I: Iterator<Item = &'a Entity<'tu>>>(
+        clang_type: &clang::Type,
+        children: &mut Peekable<I>,
+    ) -> CallableDecl {
+        assert!(
+            [
+                TypeKind::Unexposed,
+                TypeKind::FunctionPrototype,
+                TypeKind::BlockPointer,
+            ].contains(&clang_type.get_kind())
+        );
+        let result_type = clang_type.get_result_type().unwrap();
+        let ret_type = ObjCType::from(&result_type, children);
+        let mut args: Vec<(Option<String>, ObjCType)> = Vec::new();
+        let arg_count = clang_type.get_argument_types().unwrap().len();
+        if arg_count > 0 {
+            // Very ugly hack, due to if a FunctionPrototype returns a typedef for some reason result_type is the expanded type...?
+            let mut should_skip_next = false;
+            if let Some(next_child) = children.peek() {
+                if next_child.get_kind() == EntityKind::TypeRef {
+                    should_skip_next = true;
+                }
+            }
+            if should_skip_next {
+                children.next();
+            }
+        }
+        for _ in 0..arg_count {
+            let arg_entity = children.next().unwrap();
+            assert_eq!(arg_entity.get_kind(), EntityKind::ParmDecl);
+            let arg_entity_type = arg_entity.get_type().unwrap();
+            let arg_children = arg_entity.get_children();
+            let mut arg_children_peekable = arg_children.iter().peekable();
+            let arg_objc_type = ObjCType::from(&arg_entity_type, &mut arg_children_peekable);
+            assert_eq!(arg_children_peekable.peek(), None);
+            let arg = (arg_entity.get_name(), arg_objc_type);
+            args.push(arg);
+        }
+        CallableDecl {
+            args,
+            ret_type,
+            is_variadic: clang_type.is_variadic(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct StructDecl {
     fields: Vec<(String, ObjCType)>,
@@ -319,7 +366,6 @@ impl ObjCType {
             TypeKind::Void => ObjCType::Void,
             TypeKind::ObjCId => {
                 let child = children.next().unwrap();
-                println!("************** child: {:?}", child);
                 assert!(is_entity_objc_id(child));
                 ObjCType::ObjCId(Vec::new())
             }
@@ -335,45 +381,14 @@ impl ObjCType {
             }
             TypeKind::Pointer => {
                 let pointee_type = clang_type.get_pointee_type().unwrap();
-                match pointee_type.get_result_type() {
-                    Some(result_type)
-                        if [TypeKind::Unexposed, TypeKind::FunctionPrototype]
-                            .contains(&pointee_type.get_kind()) =>
-                    {
-                        let ret_type = Self::from(&result_type, children);
-                        let mut args: Vec<(Option<String>, ObjCType)> = Vec::new();
-                        let arg_count = pointee_type.get_argument_types().unwrap().len();
-                        if arg_count > 0 {
-                            // Very ugly hack, due to if a FunctionPrototype returns a typedef for some reason result_type is the expanded type...?
-                            let mut should_skip_next = false;
-                            if let Some(next_child) = children.peek() {
-                                if next_child.get_kind() == EntityKind::TypeRef {
-                                    should_skip_next = true;
-                                }
-                            }
-                            if should_skip_next {
-                                children.next();
-                            }
-                        }
-                        for _ in 0..arg_count {
-                            let arg_entity = children.next().unwrap();
-                            assert_eq!(arg_entity.get_kind(), EntityKind::ParmDecl);
-                            let arg_entity_type = arg_entity.get_type().unwrap();
-                            let arg_children = arg_entity.get_children();
-                            let mut arg_children_peekable = arg_children.iter().peekable();
-                            let arg_objc_type =
-                                Self::from(&arg_entity_type, &mut arg_children_peekable);
-                            assert_eq!(arg_children_peekable.peek(), None);
-                            let arg = (arg_entity.get_name(), arg_objc_type);
-                            args.push(arg);
-                        }
-                        ObjCType::FnPtr(Box::new(CallableDecl {
-                            args,
-                            ret_type,
-                            is_variadic: pointee_type.is_variadic(),
-                        }))
-                    }
-                    _ => ObjCType::Ptr(Box::new(Self::from(&pointee_type, children))),
+                if pointee_type.get_result_type() != None
+                    && [TypeKind::Unexposed, TypeKind::FunctionPrototype]
+                        .contains(&pointee_type.get_kind())
+                {
+                    let callable_decl = CallableDecl::from_type(&pointee_type, children);
+                    ObjCType::FnPtr(Box::new(callable_decl))
+                } else {
+                    ObjCType::Ptr(Box::new(Self::from(&pointee_type, children)))
                 }
             }
             TypeKind::Elaborated => {
@@ -382,6 +397,11 @@ impl ObjCType {
                 ObjCType::Void // TODO
             }
             TypeKind::ULong => ObjCType::ULong,
+            TypeKind::BlockPointer => {
+                let callable_decl =
+                    CallableDecl::from_type(&clang_type.get_pointee_type().unwrap(), children);
+                ObjCType::BlockPtr(Box::new(callable_decl))
+            }
             _ => {
                 panic!(
                     "Unimplemented type {:?} - {:?}",
@@ -1671,10 +1691,10 @@ mod tests {
 
         let source = "
             typedef unsigned long usize;
-            // typedef usize(^BLOCK_PTR)(id, ...);
+            typedef usize(^BLOCK_PTR)(id, ...);
             @interface A
             + (usize(^)(id, ...))directBlockPtr;
-            // + (BLOCK_PTR)typedefedBlockPtr;
+            + (BLOCK_PTR)typedefedBlockPtr;
             @end
         ";
 
@@ -1697,17 +1717,17 @@ mod tests {
                                 is_variadic: true,
                             })),
                         },
-                        // ObjCMethod {
-                        //     kind: ObjCMethodKind::ClassMethod,
-                        //     is_optional: false,
-                        //     sel: "typedefedBlockPtr".to_owned(),
-                        //     args: vec![],
-                        //     ret_type: ObjCType::Block(Box::new(CallableDecl {
-                        //         args: vec![(None, ObjCType::ObjCId(vec![]))],
-                        //         ret_type: ObjCType::ULong,
-                        //         is_variadic: true,
-                        //     })),
-                        // },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::ClassMethod,
+                            is_optional: false,
+                            sel: "typedefedBlockPtr".to_owned(),
+                            args: vec![],
+                            ret_type: ObjCType::BlockPtr(Box::new(CallableDecl {
+                                args: vec![(None, ObjCType::ObjCId(vec![]))],
+                                ret_type: ObjCType::ULong,
+                                is_variadic: true,
+                            })),
+                        },
                     ],
                     guessed_origin: Origin::Unknown,
                 },
