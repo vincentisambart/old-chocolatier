@@ -1483,13 +1483,15 @@ mod tests {
         let clang = Clang::new().expect("Could not load libclang");
 
         let source = "
-            @protocol Ambiguous, P1;
-            @class Ambiguous;
+            @protocol Ambiguous1, P1, Ambiguous2;
+            @class Ambiguous1;
             @class A;
+            typedef A* Ambiguous2;
             @interface B<__covariant T>
             @end
-            @interface C<__covariant T, __covariant U>
-            - (C<C<B<Ambiguous*><Ambiguous>*, U>*, B<id<P1>>*> *)foo;
+            @interface C<__covariant Ambiguous2, __covariant U>
+            - (C<C<B<Ambiguous1*><Ambiguous1>*, U>*, B<id<P1>>*> *)foo;
+            - (C<C<B<Ambiguous1*><Ambiguous1>*, U>*, B<A*><Ambiguous2>*> *)bar;
             @end
         ";
 
@@ -1505,7 +1507,7 @@ mod tests {
                 },
                 ObjCClass {
                     name: "C".to_owned(),
-                    template_arguments: vec!["T".to_owned(), "U".to_owned()],
+                    template_arguments: vec!["Ambiguous2".to_owned(), "U".to_owned()],
                     superclass_name: None,
                     adopted_protocol_names: vec![],
                     methods: vec![
@@ -1524,12 +1526,12 @@ mod tests {
                                                 "B".to_owned(),
                                                 vec![
                                                     ObjCType::ObjCObjPtr(
-                                                        "Ambiguous".to_owned(),
+                                                        "Ambiguous1".to_owned(),
                                                         vec![],
                                                         vec![],
                                                     ),
                                                 ],
-                                                vec!["Ambiguous".to_owned()],
+                                                vec!["Ambiguous1".to_owned()],
                                             ),
                                             ObjCType::TemplateArgument("U".to_owned()),
                                         ],
@@ -1539,6 +1541,41 @@ mod tests {
                                         "B".to_owned(),
                                         vec![ObjCType::ObjCId(vec!["P1".to_owned()])],
                                         vec![],
+                                    ),
+                                ],
+                                vec![],
+                            ),
+                        },
+                        ObjCMethod {
+                            kind: ObjCMethodKind::InstanceMethod,
+                            is_optional: false,
+                            sel: "bar".to_owned(),
+                            args: vec![],
+                            ret_type: ObjCType::ObjCObjPtr(
+                                "C".to_owned(),
+                                vec![
+                                    ObjCType::ObjCObjPtr(
+                                        "C".to_owned(),
+                                        vec![
+                                            ObjCType::ObjCObjPtr(
+                                                "B".to_owned(),
+                                                vec![
+                                                    ObjCType::ObjCObjPtr(
+                                                        "Ambiguous1".to_owned(),
+                                                        vec![],
+                                                        vec![],
+                                                    ),
+                                                ],
+                                                vec!["Ambiguous1".to_owned()],
+                                            ),
+                                            ObjCType::TemplateArgument("U".to_owned()),
+                                        ],
+                                        vec![],
+                                    ),
+                                    ObjCType::ObjCObjPtr(
+                                        "B".to_owned(),
+                                        vec![ObjCType::ObjCObjPtr("A".to_owned(), vec![], vec![])],
+                                        vec!["Ambiguous2".to_owned()],
                                     ),
                                 ],
                                 vec![],
